@@ -134,7 +134,7 @@ pub async fn chat_send(
     let recent = state.db.recent(12, false).map_err(|e| format!("{e:#}"))?;
     let failures = state.db.recent(5, true).map_err(|e| format!("{e:#}"))?;
     let fix_passages = similar_fixes(&state, &failures);
-    let cwd = state.cwd.lock().ok().and_then(|slot| slot.clone());
+    let cwd = crate::ipc_docs::active_cwd(&state);
     let shell = state
         .shell
         .lock()

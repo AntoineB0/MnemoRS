@@ -187,17 +187,25 @@ fn store_system_fingerprint(db: &Db) {
     }
 }
 
-pub fn current_cwd(state: &AppState) -> String {
-    state
-        .cwd
+/// Dossier du terminal actif, ou à défaut d'un terminal encore ouvert.
+pub fn active_cwd(state: &AppState) -> Option<String> {
+    let active = state
+        .active_session
         .lock()
         .ok()
-        .and_then(|slot| slot.clone())
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|path| path.display().to_string())
-                .unwrap_or_default()
-        })
+        .and_then(|slot| slot.clone());
+    let cwds = state.cwds.lock().ok()?;
+    active
+        .and_then(|id| cwds.get(&id).cloned())
+        .or_else(|| cwds.values().next().cloned())
+}
+
+pub fn current_cwd(state: &AppState) -> String {
+    active_cwd(state).unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default()
+    })
 }
 
 /// Vrai si l'URL pointe vers la machine locale. La comparaison porte sur l'hôte

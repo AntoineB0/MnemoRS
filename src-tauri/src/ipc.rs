@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,7 +17,8 @@ struct Tap {
     db: Arc<storage::Db>,
     session_id: String,
     app: AppHandle,
-    cwd: Arc<Mutex<Option<String>>>,
+    cwds: Arc<Mutex<HashMap<String, String>>>,
+    active_session: Arc<Mutex<Option<String>>>,
     ingest_running: Arc<AtomicBool>,
     cwd_generation: Arc<AtomicU64>,
     pending_failure: Option<fixes::PendingFix>,
@@ -27,7 +29,8 @@ impl Tap {
         db: Arc<storage::Db>,
         session_id: String,
         app: AppHandle,
-        cwd: Arc<Mutex<Option<String>>>,
+        cwds: Arc<Mutex<HashMap<String, String>>>,
+        active_session: Arc<Mutex<Option<String>>>,
         ingest_running: Arc<AtomicBool>,
         cwd_generation: Arc<AtomicU64>,
     ) -> Self {
@@ -36,7 +39,8 @@ impl Tap {
             db,
             session_id,
             app,
-            cwd,
+            cwds,
+            active_session,
             ingest_running,
             cwd_generation,
             pending_failure: None,
@@ -89,58 +93,33 @@ impl Tap {
     /// évite qu'un `cd` rapide lance plusieurs passes, le verrou évite le
     /// chevauchement avec une indexation manuelle.
     fn schedule_auto_sync(&self, cwd: String) {
-        let generation = self.cwd_generation.fetch_add(1, Ordering::Relaxed) + 1;
-        let app = self.app.clone();
-        let db = Arc::clone(&self.db);
-        let running = Arc::clone(&self.ingest_running);
-        let current = Arc::clone(&self.cwd_generation);
-
-        tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            if current.load(Ordering::Relaxed) != generation {
-                return;
-            }
-            if running.swap(true, Ordering::Relaxed) {
-                return;
-            }
-            let _ = app.emit("docs:indexing", true);
-            match crate::ipc_docs::auto_sync(app.clone(), db, cwd).await {
-                Ok(report) => {
-                    if report.indexed > 0 || report.deleted > 0 {
-                        log::info!(
-                            "indexation auto : {} réindexés, {} supprimés, {} chunks",
-                            report.indexed,
-                            report.deleted,
-                            report.chunks
-                        );
-                    }
-                    if report.failed > 0 {
-                        log::warn!(
-                            "indexation auto : {} source(s) en échec",
-                            report.failed
-                        );
-                    }
-                }
-                Err(error) => log::warn!("indexation automatique : {error:#}"),
-            }
-            let _ = app.emit("docs:indexing", false);
-            running.store(false, Ordering::Relaxed);
-        });
+        schedule_auto_sync(
+            self.app.clone(),
+            Arc::clone(&self.db),
+            Arc::clone(&self.ingest_running),
+            Arc::clone(&self.cwd_generation),
+            cwd,
+        );
     }
 
     fn process(&mut self, input: &str) -> String {
         let (visible, records) = self.capture.feed(input);
         if let Some(cwd) = self.capture.cwd() {
             let changed = self
-                .cwd
+                .cwds
                 .lock()
-                .map(|mut slot| {
-                    let changed = slot.as_deref() != Some(cwd);
-                    *slot = Some(cwd.to_string());
+                .map(|mut cwds| {
+                    let changed = cwds.get(&self.session_id).map(String::as_str) != Some(cwd);
+                    cwds.insert(self.session_id.clone(), cwd.to_string());
                     changed
                 })
                 .unwrap_or(false);
-            if changed {
+            let active = self
+                .active_session
+                .lock()
+                .ok()
+                .and_then(|slot| slot.clone());
+            if changed && active.as_deref() == Some(self.session_id.as_str()) {
                 self.schedule_auto_sync(cwd.to_string());
             }
         }
@@ -165,6 +144,48 @@ impl Tap {
     }
 }
 
+/// Réindexe en tâche de fond après un changement de dossier. La génération
+/// évite qu'un `cd` rapide lance plusieurs passes, le verrou évite le
+/// chevauchement avec une indexation manuelle.
+fn schedule_auto_sync(
+    app: AppHandle,
+    db: Arc<storage::Db>,
+    running: Arc<AtomicBool>,
+    generation: Arc<AtomicU64>,
+    cwd: String,
+) {
+    let expected = generation.fetch_add(1, Ordering::Relaxed) + 1;
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        if generation.load(Ordering::Relaxed) != expected {
+            return;
+        }
+        if running.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        let _ = app.emit("docs:indexing", true);
+        match crate::ipc_docs::auto_sync(app.clone(), db, cwd).await {
+            Ok(report) => {
+                if report.indexed > 0 || report.deleted > 0 {
+                    log::info!(
+                        "indexation auto : {} réindexés, {} supprimés, {} chunks",
+                        report.indexed,
+                        report.deleted,
+                        report.chunks
+                    );
+                }
+                if report.failed > 0 {
+                    log::warn!("indexation auto : {} source(s) en échec", report.failed);
+                }
+            }
+            Err(error) => log::warn!("indexation automatique : {error:#}"),
+        }
+        let _ = app.emit("docs:indexing", false);
+        running.store(false, Ordering::Relaxed);
+    });
+}
+
 #[tauri::command]
 pub fn pty_spawn(
     app: AppHandle,
@@ -176,6 +197,7 @@ pub fn pty_spawn(
 ) -> Result<String, String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
     let session_id = pty::next_session_id();
+    let cwd = cwd.or_else(|| crate::ipc_docs::active_cwd(&state));
 
     state
         .db
@@ -189,16 +211,27 @@ pub fn pty_spawn(
         Arc::clone(&state.db),
         session_id.clone(),
         app,
-        Arc::clone(&state.cwd),
+        Arc::clone(&state.cwds),
+        Arc::clone(&state.active_session),
         Arc::clone(&state.ingest_running),
         Arc::clone(&state.cwd_generation),
     );
     let sessions = Arc::clone(&state.sessions);
+    let cwds = Arc::clone(&state.cwds);
+    let active_session = Arc::clone(&state.active_session);
     let exited_id = session_id.clone();
     let emit = move |event| {
         if matches!(&event, pty::PtyEvent::Exit { .. }) {
             if let Ok(mut sessions) = sessions.lock() {
                 sessions.remove(&exited_id);
+            }
+            if let Ok(mut cwds) = cwds.lock() {
+                cwds.remove(&exited_id);
+            }
+            if let Ok(mut active) = active_session.lock() {
+                if active.as_deref() == Some(exited_id.as_str()) {
+                    *active = None;
+                }
             }
         }
         on_event.send(event).is_ok()
@@ -219,7 +252,57 @@ pub fn pty_spawn(
         .lock()
         .map_err(|_| "état des sessions verrouillé".to_string())?;
     sessions.insert(session_id.clone(), session);
+    drop(sessions);
+
+    if let Some(cwd) = cwd {
+        if let Ok(mut cwds) = state.cwds.lock() {
+            cwds.insert(session_id.clone(), cwd);
+        }
+    }
+    if let Ok(mut active) = state.active_session.lock() {
+        *active = Some(session_id.clone());
+    }
     Ok(session_id)
+}
+
+#[tauri::command]
+pub fn pty_activate(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<(), String> {
+    let previous = state
+        .active_session
+        .lock()
+        .ok()
+        .and_then(|slot| slot.clone());
+    if previous.as_deref() == Some(session_id.as_str()) {
+        return Ok(());
+    }
+    if let Ok(mut active) = state.active_session.lock() {
+        *active = Some(session_id.clone());
+    }
+
+    let (next_cwd, previous_cwd) = {
+        let cwds = state
+            .cwds
+            .lock()
+            .map_err(|_| "dossiers verrouillés".to_string())?;
+        (
+            cwds.get(&session_id).cloned(),
+            previous.and_then(|id| cwds.get(&id).cloned()),
+        )
+    };
+    if let Some(cwd) = next_cwd.filter(|cwd| Some(cwd) != previous_cwd.as_ref()) {
+        schedule_auto_sync(
+            app,
+            Arc::clone(&state.db),
+            Arc::clone(&state.ingest_running),
+            Arc::clone(&state.cwd_generation),
+            cwd,
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -288,6 +371,16 @@ pub fn pty_kill(state: State<'_, AppState>, session_id: String) -> Result<(), St
         .map_err(|_| "état des sessions verrouillé".to_string())?;
     if let Some(mut session) = sessions.remove(&session_id) {
         session.kill();
+    }
+    drop(sessions);
+
+    if let Ok(mut cwds) = state.cwds.lock() {
+        cwds.remove(&session_id);
+    }
+    if let Ok(mut active) = state.active_session.lock() {
+        if active.as_deref() == Some(session_id.as_str()) {
+            *active = None;
+        }
     }
     Ok(())
 }

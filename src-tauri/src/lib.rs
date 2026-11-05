@@ -20,8 +20,9 @@ use tauri::Manager;
 
 pub struct AppState {
     pub sessions: Arc<Mutex<HashMap<String, pty::Session>>>,
+    pub cwds: Arc<Mutex<HashMap<String, String>>>,
+    pub active_session: Arc<Mutex<Option<String>>>,
     pub cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    pub cwd: Arc<Mutex<Option<String>>>,
     pub shell: Mutex<String>,
     pub ingest_running: Arc<AtomicBool>,
     pub ingest_cancel: Arc<AtomicBool>,
@@ -39,6 +40,7 @@ pub fn run() {
             ipc::pty_write,
             ipc::pty_resize,
             ipc::pty_kill,
+            ipc::pty_activate,
             ipc::history_search,
             ipc::history_get,
             ipc::history_clear,
@@ -83,8 +85,9 @@ pub fn run() {
 
             app.manage(AppState {
                 sessions: Arc::new(Mutex::new(HashMap::new())),
+                cwds: Arc::new(Mutex::new(HashMap::new())),
+                active_session: Arc::new(Mutex::new(None)),
                 cancels: Mutex::new(HashMap::new()),
-                cwd: Arc::new(Mutex::new(None)),
                 shell: Mutex::new(String::new()),
                 ingest_running: Arc::new(AtomicBool::new(false)),
                 ingest_cancel: Arc::new(AtomicBool::new(false)),
