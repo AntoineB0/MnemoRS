@@ -56,7 +56,7 @@
     if (anchor) {
       event.preventDefault()
       const href = anchor.getAttribute('href')
-      if (href) openUrl(href).catch(() => {})
+      if (href && /^https?:\/\//i.test(href)) openUrl(href).catch(() => {})
       return
     }
 
