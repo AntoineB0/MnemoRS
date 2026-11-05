@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MnemoRS
+Comment=Terminal avec assistant IA
+Exec=mnemors
+Icon=mnemors
+Terminal=false
+Categories=Development;
+StartupWMClass=com.icetech.mnemors
+NoDisplay=true

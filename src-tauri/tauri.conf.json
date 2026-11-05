@@ -23,7 +23,8 @@
     ],
     "security": {
       "csp": null
-    }
+    },
+    "enableGTKAppId": true
   },
   "bundle": {
     "active": true,
@@ -42,6 +43,13 @@
     },
     "category": "DeveloperTool",
     "shortDescription": "Terminal avec assistant IA",
-    "longDescription": "Emulateur de terminal avec un assistant IA qui connait l'historique des commandes."
+    "longDescription": "Emulateur de terminal avec un assistant IA qui connait l'historique des commandes.",
+    "linux": {
+      "rpm": {
+        "files": {
+          "/usr/share/applications/com.icetech.mnemors.desktop": "linux/com.icetech.mnemors.desktop"
+        }
+      }
+    }
   }
 }
