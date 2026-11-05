@@ -255,4 +255,54 @@ mod tests {
         assert_eq!(records[0].exit_code, 0);
         assert!(records[0].output.contains("hello-capture"));
     }
+
+    #[test]
+    fn ctrl_c_produit_le_code_130() {
+        if !Path::new("/usr/bin/zsh").exists() {
+            return;
+        }
+
+        let state_dir = std::env::temp_dir().join("mnemors-test-ctrl-c");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        let records = Arc::new(StdMutex::new(Vec::<CommandRecord>::new()));
+        let sink = records.clone();
+        let mut capture = Capture::default();
+        let tap = move |text: &str| {
+            let (visible, captured) = capture.feed(text);
+            sink.lock().unwrap().extend(captured);
+            visible
+        };
+
+        let mut session = spawn(
+            "/usr/bin/zsh",
+            None,
+            80,
+            24,
+            &state_dir,
+            tap,
+            |_| true,
+        )
+        .expect("spawn de zsh");
+
+        session.write(b"sleep 30\n").expect("écriture");
+        std::thread::sleep(Duration::from_millis(300));
+        session.write(b"\x03").expect("Ctrl-C");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if !records.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        session.kill();
+        std::fs::remove_dir_all(&state_dir).ok();
+
+        let records = records.lock().unwrap();
+        assert_eq!(records.len(), 1, "enregistrements : {records:?}");
+        assert_eq!(records[0].cmd, "sleep 30");
+        assert_eq!(records[0].exit_code, 130);
+    }
 }
