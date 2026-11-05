@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::thread;
@@ -6,6 +7,8 @@ use std::thread;
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
+
+use crate::shell;
 
 mod utf8;
 use utf8::Utf8Chunker;
@@ -53,17 +56,24 @@ impl Session {
     }
 }
 
-/// Lance `shell` dans un pseudo-terminal et émet sa sortie via `emit`.
-/// `emit` est découplé de Tauri pour permettre de tester le PTY seul.
-pub fn spawn<F>(
+pub fn next_session_id() -> String {
+    format!("pty-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Lance `shell` dans un pseudo-terminal. `tap` voit la sortie brute et peut
+/// la transformer (capture des commandes) avant l'envoi à `emit`.
+pub fn spawn<F, T>(
     shell: &str,
     cwd: Option<&str>,
     cols: u16,
     rows: u16,
+    state_dir: &Path,
+    mut tap: T,
     emit: F,
-) -> Result<(String, Session)>
+) -> Result<Session>
 where
     F: Fn(PtyEvent) -> bool + Clone + Send + 'static,
+    T: FnMut(&str) -> String + Send + 'static,
 {
     let pair = native_pty_system().openpty(PtySize {
         rows: rows.max(1),
@@ -77,6 +87,22 @@ where
     cmd.env("COLORTERM", "truecolor");
     if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
         cmd.cwd(cwd);
+    }
+
+    match shell::detect(shell) {
+        Some(integration) => {
+            let dir = state_dir.join("shell").join(integration.id());
+            integration
+                .install(&dir)
+                .context("installation de l'intégration shell")?;
+            for (key, value) in integration.env(&dir) {
+                cmd.env(key, value);
+            }
+            for arg in integration.args() {
+                cmd.arg(arg);
+            }
+        }
+        None => log::warn!("aucune intégration shell pour {shell} : capture désactivée"),
     }
 
     let mut child = pair
@@ -101,7 +127,10 @@ where
                     Ok(0) => break,
                     Ok(n) => {
                         let text = chunker.push(&buf[..n]);
-                        if !text.is_empty() && !data_emit(PtyEvent::Data { chunk: text }) {
+                        let visible = tap(&text);
+                        if !visible.is_empty()
+                            && !data_emit(PtyEvent::Data { chunk: visible })
+                        {
                             break;
                         }
                     }
@@ -113,7 +142,10 @@ where
             }
             let tail = chunker.flush();
             if !tail.is_empty() {
-                let _ = data_emit(PtyEvent::Data { chunk: tail });
+                let visible = tap(&tail);
+                if !visible.is_empty() {
+                    let _ = data_emit(PtyEvent::Data { chunk: visible });
+                }
             }
         })?;
 
@@ -124,20 +156,17 @@ where
             let _ = emit(PtyEvent::Exit { code });
         })?;
 
-    let id = format!("pty-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
-    Ok((
-        id,
-        Session {
-            master: pair.master,
-            writer: Mutex::new(writer),
-            killer,
-        },
-    ))
+    Ok(Session {
+        master: pair.master,
+        writer: Mutex::new(writer),
+        killer,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capture::{Capture, CommandRecord};
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::{Duration, Instant};
 
@@ -152,7 +181,17 @@ mod tests {
             true
         };
 
-        let (_, mut session) = spawn("/bin/sh", None, 80, 24, emit).expect("spawn du shell");
+        let state_dir = std::env::temp_dir();
+        let mut session = spawn(
+            "/bin/sh",
+            None,
+            80,
+            24,
+            &state_dir,
+            |text: &str| text.to_string(),
+            emit,
+        )
+        .expect("spawn du shell");
         session.write(b"echo hello-pty\n").expect("écriture");
 
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -166,5 +205,54 @@ mod tests {
         session.kill();
         let seen = output.lock().unwrap().clone();
         assert!(seen.contains("hello-pty"), "sortie reçue : {seen:?}");
+    }
+
+    #[test]
+    fn zsh_emet_les_marqueurs_de_capture() {
+        if !Path::new("/usr/bin/zsh").exists() {
+            return;
+        }
+
+        let state_dir = std::env::temp_dir().join("mnemors-test-capture");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        let records = Arc::new(StdMutex::new(Vec::<CommandRecord>::new()));
+        let sink = records.clone();
+        let mut capture = Capture::default();
+        let tap = move |text: &str| {
+            let (visible, captured) = capture.feed(text);
+            sink.lock().unwrap().extend(captured);
+            visible
+        };
+
+        let mut session = spawn(
+            "/usr/bin/zsh",
+            None,
+            80,
+            24,
+            &state_dir,
+            tap,
+            |_| true,
+        )
+        .expect("spawn de zsh");
+
+        session.write(b"echo hello-capture\n").expect("écriture");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if !records.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        session.kill();
+        std::fs::remove_dir_all(&state_dir).ok();
+
+        let records = records.lock().unwrap();
+        assert_eq!(records.len(), 1, "enregistrements : {records:?}");
+        assert_eq!(records[0].cmd, "echo hello-capture");
+        assert_eq!(records[0].exit_code, 0);
+        assert!(records[0].output.contains("hello-capture"));
     }
 }
