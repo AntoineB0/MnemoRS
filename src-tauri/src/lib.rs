@@ -61,6 +61,7 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
+            storage::restrict(&data_dir, 0o700)?;
             let db = storage::Db::open(&data_dir.join("mnemors.db"))
                 .map_err(|error| format!("{error:#}"))?;
 

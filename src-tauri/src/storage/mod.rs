@@ -44,9 +44,25 @@ pub struct Db {
     conn: Mutex<Connection>,
 }
 
+/// Restreint un fichier ou un dossier à son propriétaire. L'historique contient
+/// toutes les commandes exécutées et leurs sorties.
+pub fn restrict(path: &Path, mode: u32) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .with_context(|| format!("restriction des droits de {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = (path, mode);
+    Ok(())
+}
+
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).with_context(|| format!("ouverture de {}", path.display()))?;
+        // Les fichiers -wal et -shm héritent de l'umask : le dossier 0700 les protège.
+        restrict(path, 0o600)?;
         Self::from_connection(conn)
     }
 
@@ -712,6 +728,22 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.ensure_session("pty-1", "zsh", Some("/home/moi"), 1).unwrap();
         db
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn base_lisible_par_le_proprietaire_seulement() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("mnemors-perms-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("mnemors.db");
+
+        let _db = Db::open(&path).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+
+        assert_eq!(mode, 0o600);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
