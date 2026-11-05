@@ -24,13 +24,17 @@
   </nav>
 
   <div class="content">
-    {#if tab === 'history'}
+    <!-- Les panneaux restent montés : changer d'onglet ne perd ni la
+         conversation en cours ni la position de lecture. -->
+    <div class="panel" class:hidden={tab !== 'history'}>
       <HistoryPanel />
-    {:else if tab === 'chat'}
-      <ChatPanel />
-    {:else}
+    </div>
+    <div class="panel" class:hidden={tab !== 'chat'}>
+      <ChatPanel visible={tab === 'chat'} />
+    </div>
+    <div class="panel" class:hidden={tab !== 'settings'}>
       <SettingsPanel />
-    {/if}
+    </div>
   </div>
 </aside>
 
@@ -84,5 +88,16 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+  }
+
+  .panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel.hidden {
+    display: none;
   }
 </style>

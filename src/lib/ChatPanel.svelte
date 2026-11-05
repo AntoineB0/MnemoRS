@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+
+  let { visible = true }: { visible?: boolean } = $props()
   import { Channel, invoke } from '@tauri-apps/api/core'
   import { openUrl } from '@tauri-apps/plugin-opener'
   import MarkdownIt from 'markdown-it'
@@ -100,8 +102,10 @@
   })
 
   $effect(() => {
-    messages.length
-    if (list) list.scrollTop = list.scrollHeight
+    const count = messages.length
+    if (!visible || !list) return
+    list.scrollTop = list.scrollHeight
+    void count
   })
 
   async function send() {
