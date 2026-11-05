@@ -14,6 +14,8 @@
 
   let host: HTMLDivElement
   let term: Xterm | undefined
+  let exited = $state(false)
+  let restart = $state<() => void>(() => {})
 
   $effect(() => {
     if (term) term.options.theme = terminalTheme(theme.current)
@@ -58,25 +60,39 @@
       if (event.type === 'data') terminal.write(event.chunk)
       else if (event.type === 'error')
         terminal.write(`\r\n\x1b[31m[pty] ${event.message}\x1b[0m\r\n`)
-      else
+      else {
+        ready = false
+        exited = true
         terminal.write(
           `\r\n\x1b[90m[processus terminé : ${event.code ?? '?'}]\x1b[0m\r\n`,
         )
+      }
     }
 
-    invoke<string>('pty_spawn', {
-      cols: terminal.cols,
-      rows: terminal.rows,
-      onEvent: channel,
-    })
-      .then((id) => {
-        sessionId = id
-        ready = true
-        terminal.focus()
+    const start = () => {
+      exited = false
+      invoke<string>('pty_spawn', {
+        cols: terminal.cols,
+        rows: terminal.rows,
+        onEvent: channel,
       })
-      .catch((error) =>
-        terminal.write(`\r\n\x1b[31m[spawn] ${error}\x1b[0m\r\n`),
-      )
+        .then((id) => {
+          sessionId = id
+          ready = true
+          terminal.focus()
+        })
+        .catch((error) =>
+          terminal.write(`\r\n\x1b[31m[spawn] ${error}\x1b[0m\r\n`),
+        )
+    }
+
+    restart = () => {
+      if (sessionId) invoke('pty_kill', { sessionId }).catch(() => {})
+      sessionId = ''
+      start()
+    }
+
+    start()
 
     const dataListener = terminal.onData((data) => {
       if (!ready) return
@@ -120,15 +136,46 @@
   })
 </script>
 
-<div class="terminal" bind:this={host}></div>
+<div class="terminal-wrap">
+  <div class="terminal" bind:this={host}></div>
+  {#if exited}
+    <button class="restart" onclick={restart}>relancer le terminal</button>
+  {/if}
+</div>
 
 <style>
+  .terminal-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+  }
+
   .terminal {
     flex: 1;
     min-width: 0;
     min-height: 0;
     padding: 10px 6px 6px 12px;
     background: var(--void);
+  }
+
+  .restart {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    padding: 6px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .restart:hover {
+    border-color: var(--signal);
+    color: var(--signal);
   }
 
   :global(.xterm) {

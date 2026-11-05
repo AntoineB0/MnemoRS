@@ -193,7 +193,16 @@ pub fn pty_spawn(
         Arc::clone(&state.ingest_running),
         Arc::clone(&state.cwd_generation),
     );
-    let emit = move |event| on_event.send(event).is_ok();
+    let sessions = Arc::clone(&state.sessions);
+    let exited_id = session_id.clone();
+    let emit = move |event| {
+        if matches!(&event, pty::PtyEvent::Exit { .. }) {
+            if let Ok(mut sessions) = sessions.lock() {
+                sessions.remove(&exited_id);
+            }
+        }
+        on_event.send(event).is_ok()
+    };
     let session = pty::spawn(
         &shell,
         cwd.as_deref(),

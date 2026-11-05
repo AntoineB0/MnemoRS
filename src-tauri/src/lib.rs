@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 pub struct AppState {
-    pub sessions: Mutex<HashMap<String, pty::Session>>,
+    pub sessions: Arc<Mutex<HashMap<String, pty::Session>>>,
     pub cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub cwd: Arc<Mutex<Option<String>>>,
     pub shell: Mutex<String>,
@@ -80,7 +80,7 @@ pub fn run() {
             }
 
             app.manage(AppState {
-                sessions: Mutex::new(HashMap::new()),
+                sessions: Arc::new(Mutex::new(HashMap::new())),
                 cancels: Mutex::new(HashMap::new()),
                 cwd: Arc::new(Mutex::new(None)),
                 shell: Mutex::new(String::new()),
