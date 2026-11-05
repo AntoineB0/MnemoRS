@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Channel, invoke } from '@tauri-apps/api/core'
+  import { openUrl } from '@tauri-apps/plugin-opener'
+  import MarkdownIt from 'markdown-it'
 
   type ProviderView = {
     id: string
@@ -29,6 +31,21 @@
 
   const current = $derived(providers.find((p) => p.id === providerId))
 
+  // html désactivé : le modèle ne peut pas injecter de balises dans la WebView.
+  const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
+
+  function renderMarkdown(text: string) {
+    return md.render(text)
+  }
+
+  function handleClick(event: MouseEvent) {
+    const anchor = (event.target as HTMLElement).closest('.messages a')
+    if (!anchor) return
+    event.preventDefault()
+    const href = anchor.getAttribute('href')
+    if (href) openUrl(href).catch(() => {})
+  }
+
   async function loadProviders() {
     try {
       providers = await invoke<ProviderView[]>('providers_list')
@@ -40,7 +57,11 @@
     }
   }
 
-  onMount(loadProviders)
+  onMount(() => {
+    void loadProviders()
+    document.addEventListener('click', handleClick)
+    return () => document.removeEventListener('click', handleClick)
+  })
 
   $effect(() => {
     messages.length
@@ -116,11 +137,17 @@
     <button onclick={clear} disabled={streaming || messages.length === 0}>effacer</button>
   </div>
 
-  <div class="messages" bind:this={list}>
+  <div class="messages" role="log" aria-live="polite" bind:this={list}>
     {#each messages as message, index (index)}
       <article class={message.role}>
         <span class="role">{message.role === 'user' ? 'vous' : 'ia'}</span>
-        <span class="text">{message.content || (streaming ? '…' : '')}</span>
+        <div class="text">
+          {#if message.content}
+            {@html renderMarkdown(message.content)}
+          {:else if streaming}
+            <p>…</p>
+          {/if}
+        </div>
       </article>
     {:else}
       <p class="muted">Pose une question sur tes commandes.</p>
@@ -248,9 +275,89 @@
     font-family: var(--sans);
     font-size: 13.5px;
     line-height: 1.55;
-    white-space: pre-wrap;
     overflow-wrap: anywhere;
     color: var(--ink);
+  }
+
+  .text :global(p) {
+    margin: 0 0 8px;
+  }
+
+  .text :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  .text :global(ul),
+  .text :global(ol) {
+    margin: 0 0 8px;
+    padding-left: 20px;
+  }
+
+  .text :global(li) {
+    margin: 2px 0;
+  }
+
+  .text :global(code) {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--void);
+    border: 1px solid var(--line);
+    padding: 0 3px;
+  }
+
+  .text :global(pre) {
+    margin: 0 0 8px;
+    padding: 8px;
+    background: var(--void);
+    border: 1px solid var(--line);
+    overflow-x: auto;
+  }
+
+  .text :global(pre code) {
+    border: 0;
+    padding: 0;
+    background: none;
+  }
+
+  .text :global(h1),
+  .text :global(h2),
+  .text :global(h3),
+  .text :global(h4) {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    margin: 12px 0 6px;
+  }
+
+  .text :global(a) {
+    color: var(--signal);
+    text-decoration: underline;
+  }
+
+  .text :global(blockquote) {
+    margin: 0 0 8px;
+    padding-left: 10px;
+    border-left: 2px solid var(--line);
+    color: var(--ink-dim);
+  }
+
+  .text :global(hr) {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 12px 0;
+  }
+
+  .text :global(table) {
+    border-collapse: collapse;
+    margin: 0 0 8px;
+    font-size: 12.5px;
+  }
+
+  .text :global(th),
+  .text :global(td) {
+    border: 1px solid var(--line);
+    padding: 4px 6px;
+    text-align: left;
   }
 
   .compose {
