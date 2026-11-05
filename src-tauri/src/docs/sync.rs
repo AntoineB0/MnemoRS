@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -72,7 +73,7 @@ where
     }
 
     if let Some(scope) = scope {
-        let present: Vec<&str> = sources.iter().map(|source| source.source.as_str()).collect();
+        let present: HashSet<&str> = sources.iter().map(|source| source.source.as_str()).collect();
         for (source, status) in db.sources_by_kind("file")? {
             if status != "active" || present.contains(&source.as_str()) {
                 continue;
