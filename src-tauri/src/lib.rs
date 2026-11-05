@@ -2,6 +2,7 @@ mod capture;
 mod ipc;
 mod pty;
 mod shell;
+mod storage;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
