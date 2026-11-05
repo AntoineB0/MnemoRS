@@ -69,9 +69,9 @@
   }
 </script>
 
-<div class="workspace">
+<div class="workspace" class:split={panes.length > 1}>
   {#each panes as pane (pane.key)}
-    <section class="pane" class:split={panes.length > 1}>
+    <section class="pane">
       <header class="tabs">
         {#each pane.tabs as tab (tab.key)}
           <div class="tab" class:active={tab.key === pane.active}>
@@ -124,16 +124,20 @@
     background: var(--void);
   }
 
+  /* Le séparateur passe dans l'espace entre les panneaux : aucune bordure
+     n'ajoute de décalage vertical à la barre d'onglets. */
+  .workspace.split {
+    gap: 1px;
+    background: var(--line);
+  }
+
   .pane {
     flex: 1;
     min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
-  }
-
-  .pane.split {
-    border: 1px solid var(--line);
+    background: var(--void);
   }
 
   .tabs {
