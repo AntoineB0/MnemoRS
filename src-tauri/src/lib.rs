@@ -11,7 +11,7 @@ mod storage;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
@@ -21,6 +21,8 @@ pub struct AppState {
     pub cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub cwd: Arc<Mutex<Option<String>>>,
     pub shell: Mutex<String>,
+    pub ingest_running: Arc<AtomicBool>,
+    pub cwd_generation: Arc<AtomicU64>,
     pub db: Arc<storage::Db>,
     pub data_dir: PathBuf,
 }
@@ -64,6 +66,8 @@ pub fn run() {
                 cancels: Mutex::new(HashMap::new()),
                 cwd: Arc::new(Mutex::new(None)),
                 shell: Mutex::new(String::new()),
+                ingest_running: Arc::new(AtomicBool::new(false)),
+                cwd_generation: Arc::new(AtomicU64::new(0)),
                 db: Arc::new(db),
                 data_dir,
             });

@@ -202,6 +202,7 @@ async fn retrieve_docs(state: &AppState, question: &str) -> Vec<DocPassage> {
                 source: chunk.source,
                 section: chunk.section,
                 content: chunk.content,
+                deleted: chunk.deleted,
             })
             .collect(),
         Err(error) => {

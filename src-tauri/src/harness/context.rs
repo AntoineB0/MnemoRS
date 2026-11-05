@@ -15,6 +15,7 @@ pub struct DocPassage {
     pub source: String,
     pub section: Option<String>,
     pub content: String,
+    pub deleted: bool,
 }
 
 pub struct ContextInput<'a> {
@@ -110,9 +111,14 @@ pub fn build(input: &ContextInput) -> String {
 }
 
 fn doc_label(doc: &DocPassage) -> String {
-    match &doc.section {
+    let base = match &doc.section {
         Some(section) => format!("{} § {}", doc.source, section),
         None => doc.source.clone(),
+    };
+    if doc.deleted {
+        format!("{base} — document supprimé depuis l'indexation")
+    } else {
+        base
     }
 }
 
@@ -253,11 +259,25 @@ mod tests {
             source: "doc:tar".into(),
             section: Some("OPTIONS".into()),
             content: "utiliser -x pour extraire".into(),
+            deleted: false,
         }];
         let prompt = build(&context);
         assert!(prompt.contains("## Documentation"));
         assert!(prompt.contains("doc:tar § OPTIONS"));
         assert!(prompt.contains("utiliser -x pour extraire"));
+    }
+
+    #[test]
+    fn document_supprime_signale_dans_le_prompt() {
+        let mut context = input(vec![], vec![]);
+        context.docs = vec![DocPassage {
+            source: "/home/moi/README.md".into(),
+            section: Some("Installation".into()),
+            content: "npm install".into(),
+            deleted: true,
+        }];
+        let prompt = build(&context);
+        assert!(prompt.contains("document supprimé"));
     }
 
     #[test]
@@ -268,6 +288,7 @@ mod tests {
                 source: format!("doc:{index}"),
                 section: None,
                 content: "z".repeat(2000),
+                deleted: false,
             })
             .collect();
         let prompt = build(&context);

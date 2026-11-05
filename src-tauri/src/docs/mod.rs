@@ -2,53 +2,32 @@ pub mod chunk;
 pub mod embed;
 pub mod ingest;
 pub mod search;
+pub mod sync;
+pub mod system;
 
 pub use chunk::{chunk, clean_text};
 pub use embed::{model_key, Embedder};
-pub use ingest::collect;
+pub use ingest::{readmes, tools, SourceDoc};
+pub use sync::{sync, SyncReport};
 
 #[cfg(test)]
 mod integration {
     use super::*;
-    use crate::storage::{docs as storage_docs, Db};
-    use std::path::Path;
+    use crate::storage::Db;
 
     #[tokio::test]
     #[ignore = "nécessite Ollama, bge-m3 et la page man de tar"]
     async fn pipeline_complet_sur_tar() {
         let db = Db::open_in_memory().unwrap();
-        let sources = collect(&["tar".to_string()], Path::new("/tmp"));
+        let sources = tools(&["tar".to_string()]);
         assert!(!sources.is_empty(), "aucune source collectée");
 
         let embedder = Embedder::new("http://localhost:11434/v1", "bge-m3");
-        let mut total = 0;
+        let report = sync(&db, &embedder, "bge-m3", &sources, None, |_, _, _| {})
+            .await
+            .expect("synchronisation");
 
-        for source in &sources {
-            let pieces = chunk(&source.text, 1200);
-            let texts: Vec<String> = pieces
-                .iter()
-                .map(|piece| match &piece.section {
-                    Some(section) => format!("{section}\n{}", piece.content),
-                    None => piece.content.clone(),
-                })
-                .collect();
-            let vectors = embedder.embed(&texts).await.expect("embeddings");
-            let new_chunks: Vec<storage_docs::NewChunk> = pieces
-                .iter()
-                .zip(vectors)
-                .map(|(piece, vector)| storage_docs::NewChunk {
-                    section: piece.section.clone(),
-                    content: piece.content.clone(),
-                    embedding: vector,
-                })
-                .collect();
-            let key = model_key("bge-m3", new_chunks[0].embedding.len());
-            db.replace_source(&source.source, source.tool.as_deref(), &new_chunks, &key, 1)
-                .unwrap();
-            total += new_chunks.len();
-        }
-
-        assert!(total > 5, "chunks : {total}");
+        assert!(report.chunks > 5, "chunks : {}", report.chunks);
 
         let question = "comment extraire une archive tar.gz";
         let vector = embedder
@@ -60,7 +39,77 @@ mod integration {
         let found = search::search(&db, question, &vector, &key, 5).unwrap();
 
         assert!(!found.is_empty(), "aucun passage retrouvé");
-        println!("meilleur passage : {} § {:?}", found[0].source, found[0].section);
-        println!("extrait : {}", &found[0].content.chars().take(200).collect::<String>());
+        println!(
+            "meilleur passage : {} § {:?}",
+            found[0].source, found[0].section
+        );
+        println!(
+            "extrait : {}",
+            &found[0].content.chars().take(200).collect::<String>()
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "nécessite Ollama et bge-m3"]
+    async fn deuxieme_passe_ne_reindexe_rien() {
+        let db = Db::open_in_memory().unwrap();
+        let sources = tools(&["tar".to_string()]);
+        let embedder = Embedder::new("http://localhost:11434/v1", "bge-m3");
+
+        let first = sync(&db, &embedder, "bge-m3", &sources, None, |_, _, _| {})
+            .await
+            .expect("première passe");
+        assert!(first.indexed > 0);
+
+        let second = sync(&db, &embedder, "bge-m3", &sources, None, |_, _, _| {})
+            .await
+            .expect("seconde passe");
+        assert_eq!(second.indexed, 0, "rien ne doit être réindexé");
+        assert_eq!(second.skipped, first.indexed);
+        assert_eq!(second.chunks, 0);
+    }
+
+    #[test]
+    fn fichiers_absents_marques_puis_restaures() {
+        use crate::storage::docs::NewChunk;
+
+        let db = Db::open_in_memory().unwrap();
+        let dir = std::env::temp_dir().join("mnemors-test-suppression");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("README.md");
+        std::fs::write(&file, "# Titre\n\ncontenu").unwrap();
+
+        let sources = readmes(&dir);
+        assert_eq!(sources.len(), 1);
+
+        // insertion directe pour éviter un appel réseau
+        db.replace_source(
+            &sources[0].source,
+            None,
+            &[NewChunk {
+                section: Some("Titre".into()),
+                content: "contenu".into(),
+                embedding: vec![1.0, 0.0],
+            }],
+            "m:2",
+            1,
+        )
+        .unwrap();
+        db.upsert_source(&sources[0].source, "file", "hash", 1, "active", 1)
+            .unwrap();
+
+        std::fs::remove_file(&file).unwrap();
+        let state = db.source_state(&sources[0].source).unwrap().unwrap();
+        assert_eq!(state.1, "active");
+
+        db.mark_source_deleted(&sources[0].source).unwrap();
+        let chunk = db.doc_chunk(1).unwrap().unwrap();
+        assert!(chunk.deleted);
+        assert_eq!(db.docs_stats().unwrap().deleted, 1);
+
+        db.restore_source(&sources[0].source).unwrap();
+        assert!(!db.doc_chunk(1).unwrap().unwrap().deleted);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

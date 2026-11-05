@@ -17,18 +17,33 @@ const SKIP_TOOLS: &[&str] = &[
     "false", "sleep", "which", "type", "rm", "mv", "cp", "mkdir", "touch", "kill", "pkill",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SourceKind {
+    Tool,
+    File,
+}
+
+impl SourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SourceKind::Tool => "tool",
+            SourceKind::File => "file",
+        }
+    }
+}
+
 pub struct SourceDoc {
     pub source: String,
+    pub kind: SourceKind,
     pub tool: Option<String>,
     pub text: String,
 }
 
-/// Rassemble la documentation des outils de l'historique et les READMEs du
-/// dossier. Chaque source est nettoyée et prête à être découpée.
-pub fn collect(tools: &[String], dir: &Path) -> Vec<SourceDoc> {
+/// Documentation des outils présents dans l'historique.
+pub fn tools(names: &[String]) -> Vec<SourceDoc> {
     let mut docs = Vec::new();
 
-    for tool in tools {
+    for tool in names {
         if SKIP_TOOLS.contains(&tool.as_str()) {
             continue;
         }
@@ -38,13 +53,13 @@ pub fn collect(tools: &[String], dir: &Path) -> Vec<SourceDoc> {
         if let Some(text) = text.filter(|text| text.trim().len() > 200) {
             docs.push(SourceDoc {
                 source: format!("doc:{tool}"),
+                kind: SourceKind::Tool,
                 tool: Some(tool.clone()),
                 text,
             });
         }
     }
 
-    docs.extend(readmes(dir));
     docs
 }
 
@@ -57,10 +72,12 @@ pub fn help_text(tool: &str) -> Option<String> {
         .or_else(|| run_with_timeout(tool, &["-h"], HELP_TIMEOUT))
 }
 
-/// Fichiers Markdown du dossier (profondeur 2), hors dossiers de build.
+/// Fichiers Markdown du dossier. La descente s'arrête au premier niveau sauf
+/// si le dossier est une racine de projet, pour éviter d'aspirer tout le home.
 pub fn readmes(dir: &Path) -> Vec<SourceDoc> {
+    let depth = if is_project_root(dir) { 2 } else { 0 };
     let mut files = Vec::new();
-    walk(dir, 0, &mut files);
+    walk(dir, 0, depth, &mut files);
     files.sort();
 
     files
@@ -73,6 +90,7 @@ pub fn readmes(dir: &Path) -> Vec<SourceDoc> {
             let text = std::fs::read_to_string(&path).ok()?;
             Some(SourceDoc {
                 source: path.display().to_string(),
+                kind: SourceKind::File,
                 tool: None,
                 text: clean_text(&text),
             })
@@ -80,8 +98,21 @@ pub fn readmes(dir: &Path) -> Vec<SourceDoc> {
         .collect()
 }
 
-fn walk(dir: &Path, depth: usize, files: &mut Vec<PathBuf>) {
-    if depth > 2 {
+fn is_project_root(dir: &Path) -> bool {
+    [
+        ".git",
+        "package.json",
+        "Cargo.toml",
+        "pyproject.toml",
+        "go.mod",
+        "composer.json",
+    ]
+    .iter()
+    .any(|marker| dir.join(marker).exists())
+}
+
+fn walk(dir: &Path, depth: usize, max_depth: usize, files: &mut Vec<PathBuf>) {
+    if depth > max_depth {
         return;
     }
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -93,13 +124,15 @@ fn walk(dir: &Path, depth: usize, files: &mut Vec<PathBuf>) {
         let name = entry.file_name().to_string_lossy().to_string();
 
         if path.is_dir() {
-            if matches!(
-                name.as_str(),
-                "node_modules" | "target" | ".git" | "dist" | "build" | ".venv" | "venv" | ".cache"
-            ) {
+            if name.starts_with('.')
+                || matches!(
+                    name.as_str(),
+                    "node_modules" | "target" | "dist" | "build" | ".venv" | "venv" | ".cache"
+                )
+            {
                 continue;
             }
-            walk(&path, depth + 1, files);
+            walk(&path, depth + 1, max_depth, files);
             continue;
         }
 
@@ -189,9 +222,12 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("node_modules/pkg")).unwrap();
         std::fs::create_dir_all(dir.join("sous")).unwrap();
+        std::fs::create_dir_all(dir.join(".cache")).unwrap();
+        std::fs::write(dir.join("package.json"), "{}").unwrap();
         std::fs::write(dir.join("README.md"), "# Installer\n\nnpm install").unwrap();
         std::fs::write(dir.join("sous/notes.md"), "notes").unwrap();
         std::fs::write(dir.join("node_modules/pkg/README.md"), "ignoré").unwrap();
+        std::fs::write(dir.join(".cache/secret.md"), "ignoré").unwrap();
         std::fs::write(dir.join("main.rs"), "fn main() {}").unwrap();
 
         let docs = readmes(&dir);
@@ -200,13 +236,29 @@ mod tests {
         assert!(sources.iter().any(|s| s.ends_with("README.md")));
         assert!(sources.iter().any(|s| s.ends_with("notes.md")));
         assert!(!sources.iter().any(|s| s.contains("node_modules")));
+        assert!(!sources.iter().any(|s| s.contains(".cache")));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn hors_racine_de_projet_on_ne_descend_pas() {
+        let dir = std::env::temp_dir().join("mnemors-test-home");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Documents")).unwrap();
+        std::fs::write(dir.join("notes.md"), "perso").unwrap();
+        std::fs::write(dir.join("Documents/autre.md"), "autre").unwrap();
+
+        let docs = readmes(&dir);
+        assert_eq!(docs.len(), 1, "seul le fichier du dossier courant");
+        assert!(docs[0].source.ends_with("notes.md"));
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn outils_interdits_ignores() {
-        let docs = collect(&["sudo".to_string(), "vim".to_string()], Path::new("/tmp"));
+        let docs = tools(&["sudo".to_string(), "vim".to_string()]);
         assert!(docs.is_empty());
     }
 }

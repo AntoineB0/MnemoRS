@@ -1,31 +1,31 @@
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
-use crate::docs::{self, Embedder};
-use crate::storage::{docs as storage_docs, now_ms, Db};
+use crate::docs::{self, Embedder, SyncReport};
+use crate::storage::{docs as storage_docs, Db};
 use crate::AppState;
 
 const DEFAULT_EMBED_URL: &str = "http://localhost:11434/v1";
 const DEFAULT_EMBED_MODEL: &str = "bge-m3";
-const CHUNK_CHARS: usize = 1_200;
-const EMBED_BATCH: usize = 32;
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocsSettings {
     pub base_url: String,
     pub model: String,
+    pub auto_index: bool,
 }
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum IngestEvent {
     Progress { done: usize, total: usize, message: String },
-    Done { chunks: usize, sources: usize },
+    Done { report: SyncReport },
 }
 
 #[tauri::command]
@@ -38,11 +38,14 @@ pub fn docs_set_settings(
     state: State<'_, AppState>,
     base_url: String,
     model: String,
+    auto_index: bool,
 ) -> Result<(), String> {
     let db = &state.db;
     db.set_setting("embed_base_url", base_url.trim())
         .map_err(|e| format!("{e:#}"))?;
     db.set_setting("embed_model", model.trim())
+        .map_err(|e| format!("{e:#}"))?;
+    db.set_setting("auto_index", if auto_index { "1" } else { "0" })
         .map_err(|e| format!("{e:#}"))
 }
 
@@ -56,14 +59,127 @@ pub fn docs_clear(state: State<'_, AppState>) -> Result<(), String> {
     state.db.clear_docs().map_err(|e| format!("{e:#}"))
 }
 
+/// `mode = "all"` inclut les outils (`man`/`--help`), `mode = "files"`
+/// se limite aux fichiers du dossier courant.
 #[tauri::command]
 pub async fn docs_ingest(
     state: State<'_, AppState>,
+    mode: Option<String>,
     on_event: Channel<IngestEvent>,
 ) -> Result<(), String> {
     let db = Arc::clone(&state.db);
     let settings = read_settings(&db);
-    let cwd = state
+    let cwd = current_cwd(&state);
+    let include_tools = mode.as_deref().unwrap_or("all") == "all";
+
+    let _guard = match state.ingest_running.swap(true, Ordering::Relaxed) {
+        true => return Err("une indexation est déjà en cours".into()),
+        false => RunningGuard(Arc::clone(&state.ingest_running)),
+    };
+
+    let sources = collect_sources(&db, &cwd, include_tools).await?;
+    let embedder = Embedder::new(&settings.base_url, &settings.model);
+
+    let report = docs::sync(
+        &db,
+        &embedder,
+        &settings.model,
+        &sources,
+        Some(Path::new(&cwd)),
+        |done, total, message| {
+            let _ = on_event.send(IngestEvent::Progress {
+                done,
+                total,
+                message: message.to_string(),
+            });
+        },
+    )
+    .await
+    .map_err(|error| format!("{error:#}"))?;
+
+    if include_tools {
+        store_system_fingerprint(&db);
+    }
+
+    let _ = on_event.send(IngestEvent::Done {
+        report: report.clone(),
+    });
+    let _ = db.set_setting("last_index_ts", &crate::storage::now_ms().to_string());
+    Ok(())
+}
+
+/// Passe automatique : fichiers du dossier courant, plus les outils si la
+/// base de paquets a changé. Ignorée si les embeddings ne sont pas locaux.
+pub async fn auto_sync(app: AppHandle, db: Arc<Db>, cwd: String) -> anyhow::Result<SyncReport> {
+    let settings = read_settings(&db);
+    if !settings.auto_index || !is_local(&settings.base_url) {
+        return Ok(SyncReport::default());
+    }
+
+    let tools_changed = system_changed(&db);
+    let sources = collect_sources(&db, &cwd, tools_changed)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let embedder = Embedder::new(&settings.base_url, &settings.model);
+
+    let report = docs::sync(
+        &db,
+        &embedder,
+        &settings.model,
+        &sources,
+        Some(Path::new(&cwd)),
+        |_, _, _| {},
+    )
+    .await?;
+
+    if tools_changed {
+        store_system_fingerprint(&db);
+    }
+    let _ = db.set_setting("last_index_ts", &crate::storage::now_ms().to_string());
+    let _ = app.emit("docs:indexed", &report);
+    Ok(report)
+}
+
+async fn collect_sources(
+    db: &Db,
+    cwd: &str,
+    include_tools: bool,
+) -> Result<Vec<docs::SourceDoc>, String> {
+    let tools = if include_tools {
+        db.tool_names().map_err(|e| format!("{e:#}"))?
+    } else {
+        Vec::new()
+    };
+    let dir = cwd.to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut sources = docs::tools(&tools);
+        sources.extend(docs::readmes(Path::new(&dir)));
+        sources
+    })
+    .await
+    .map_err(|error| format!("{error:?}"))
+}
+
+fn system_changed(db: &Db) -> bool {
+    match (
+        docs::system::fingerprint(),
+        db.get_setting("system_db_fingerprint").ok().flatten(),
+    ) {
+        (Some(current), Some(stored)) => current != stored,
+        (Some(_), None) => true,
+        _ => false,
+    }
+}
+
+fn store_system_fingerprint(db: &Db) {
+    if let Some(fingerprint) = docs::system::fingerprint() {
+        let _ = db.set_setting("system_db_fingerprint", &fingerprint);
+    }
+}
+
+pub fn current_cwd(state: &AppState) -> String {
+    state
         .cwd
         .lock()
         .ok()
@@ -72,79 +188,14 @@ pub async fn docs_ingest(
             std::env::current_dir()
                 .map(|path| path.display().to_string())
                 .unwrap_or_default()
-        });
+        })
+}
 
-    let tools = db.tool_names().map_err(|e| format!("{e:#}"))?;
-    let sources = tauri::async_runtime::spawn_blocking(move || {
-        docs::collect(&tools, Path::new(&cwd))
-    })
-    .await
-    .map_err(|error| format!("{error:?}"))?;
-
-    let total = sources.len();
-    if total == 0 {
-        let _ = on_event.send(IngestEvent::Done {
-            chunks: 0,
-            sources: 0,
-        });
-        return Ok(());
-    }
-
-    let embedder = Embedder::new(&settings.base_url, &settings.model);
-    let mut chunks_total = 0;
-
-    for (index, source) in sources.iter().enumerate() {
-        let pieces = docs::chunk(&source.text, CHUNK_CHARS);
-        let mut new_chunks = Vec::with_capacity(pieces.len());
-
-        for batch in pieces.chunks(EMBED_BATCH) {
-            let texts: Vec<String> = batch
-                .iter()
-                .map(|piece| match &piece.section {
-                    Some(section) => format!("{section}\n{}", piece.content),
-                    None => piece.content.clone(),
-                })
-                .collect();
-            let vectors = embedder
-                .embed(&texts)
-                .await
-                .map_err(|error| format!("{error:#}"))?;
-            for (piece, vector) in batch.iter().zip(vectors) {
-                new_chunks.push(storage_docs::NewChunk {
-                    section: piece.section.clone(),
-                    content: piece.content.clone(),
-                    embedding: vector,
-                });
-            }
-        }
-
-        let dims = new_chunks.first().map(|chunk| chunk.embedding.len()).unwrap_or(0);
-        if dims == 0 {
-            continue;
-        }
-        let key = docs::model_key(&settings.model, dims);
-        db.replace_source(
-            &source.source,
-            source.tool.as_deref(),
-            &new_chunks,
-            &key,
-            now_ms(),
-        )
-        .map_err(|error| format!("{error:#}"))?;
-
-        chunks_total += new_chunks.len();
-        let _ = on_event.send(IngestEvent::Progress {
-            done: index + 1,
-            total,
-            message: source.source.clone(),
-        });
-    }
-
-    let _ = on_event.send(IngestEvent::Done {
-        chunks: chunks_total,
-        sources: total,
-    });
-    Ok(())
+fn is_local(url: &str) -> bool {
+    let lower = url.to_lowercase();
+    lower.starts_with("http://localhost")
+        || lower.starts_with("http://127.0.0.1")
+        || lower.starts_with("http://[::1]")
 }
 
 pub fn read_settings(db: &Db) -> DocsSettings {
@@ -161,5 +212,19 @@ pub fn read_settings(db: &Db) -> DocsSettings {
             .flatten()
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_EMBED_MODEL.to_string()),
+        auto_index: db
+            .get_setting("auto_index")
+            .ok()
+            .flatten()
+            .map(|value| value != "0")
+            .unwrap_or(true),
+    }
+}
+
+struct RunningGuard(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
     }
 }

@@ -1,4 +1,6 @@
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
@@ -14,6 +16,8 @@ struct Tap {
     session_id: String,
     app: AppHandle,
     cwd: Arc<Mutex<Option<String>>>,
+    ingest_running: Arc<AtomicBool>,
+    cwd_generation: Arc<AtomicU64>,
 }
 
 impl Tap {
@@ -22,6 +26,8 @@ impl Tap {
         session_id: String,
         app: AppHandle,
         cwd: Arc<Mutex<Option<String>>>,
+        ingest_running: Arc<AtomicBool>,
+        cwd_generation: Arc<AtomicU64>,
     ) -> Self {
         Self {
             capture: Capture::default(),
@@ -29,14 +35,59 @@ impl Tap {
             session_id,
             app,
             cwd,
+            ingest_running,
+            cwd_generation,
         }
+    }
+
+    /// Réindexe en tâche de fond après un changement de dossier. La génération
+    /// évite qu'un `cd` rapide lance plusieurs passes, le verrou évite le
+    /// chevauchement avec une indexation manuelle.
+    fn schedule_auto_sync(&self, cwd: String) {
+        let generation = self.cwd_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let app = self.app.clone();
+        let db = Arc::clone(&self.db);
+        let running = Arc::clone(&self.ingest_running);
+        let current = Arc::clone(&self.cwd_generation);
+
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            if current.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            if running.swap(true, Ordering::Relaxed) {
+                return;
+            }
+            let _ = app.emit("docs:indexing", true);
+            match crate::ipc_docs::auto_sync(app.clone(), db, cwd).await {
+                Ok(report) if report.indexed > 0 || report.deleted > 0 => log::info!(
+                    "indexation auto : {} réindexés, {} supprimés, {} chunks",
+                    report.indexed,
+                    report.deleted,
+                    report.chunks
+                ),
+                Ok(_) => {}
+                Err(error) => log::warn!("indexation automatique : {error:#}"),
+            }
+            let _ = app.emit("docs:indexing", false);
+            running.store(false, Ordering::Relaxed);
+        });
     }
 
     fn process(&mut self, input: &str) -> String {
         let (visible, records) = self.capture.feed(input);
         if let Some(cwd) = self.capture.cwd() {
-            if let Ok(mut slot) = self.cwd.lock() {
-                *slot = Some(cwd.to_string());
+            let changed = self
+                .cwd
+                .lock()
+                .map(|mut slot| {
+                    let changed = slot.as_deref() != Some(cwd);
+                    *slot = Some(cwd.to_string());
+                    changed
+                })
+                .unwrap_or(false);
+            if changed {
+                self.schedule_auto_sync(cwd.to_string());
             }
         }
         for record in records {
@@ -84,6 +135,8 @@ pub fn pty_spawn(
         session_id.clone(),
         app,
         Arc::clone(&state.cwd),
+        Arc::clone(&state.ingest_running),
+        Arc::clone(&state.cwd_generation),
     );
     let emit = move |event| on_event.send(event).is_ok();
     let session = pty::spawn(

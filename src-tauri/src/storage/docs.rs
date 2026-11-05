@@ -9,12 +9,14 @@ pub struct DocChunk {
     pub tool: Option<String>,
     pub section: Option<String>,
     pub content: String,
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocsStats {
     pub chunks: i64,
+    pub deleted: i64,
     pub sources: Vec<String>,
     pub models: Vec<String>,
 }

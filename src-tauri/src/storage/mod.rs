@@ -12,6 +12,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("schema.sql"),
     include_str!("providers.sql"),
     include_str!("docs.sql"),
+    include_str!("docs_sync.sql"),
 ];
 
 pub mod docs;
@@ -263,7 +264,7 @@ impl Db {
     pub fn doc_chunk(&self, id: i64) -> Result<Option<docs::DocChunk>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id, source, tool, section, content FROM doc_chunks WHERE id = ?1",
+            "SELECT id, source, tool, section, content, deleted FROM doc_chunks WHERE id = ?1",
         )?;
         let mut rows = stmt.query(params![id])?;
         let Some(row) = rows.next()? else {
@@ -275,12 +276,88 @@ impl Db {
             tool: row.get(2)?,
             section: row.get(3)?,
             content: row.get(4)?,
+            deleted: row.get(5)?,
         }))
+    }
+
+    /// État d'une source : empreinte de contenu et statut.
+    pub fn source_state(&self, source: &str) -> Result<Option<(String, String)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT hash, status FROM doc_sources WHERE source = ?1")?;
+        let mut rows = stmt.query(params![source])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some((row.get(0)?, row.get(1)?)))
+    }
+
+    pub fn upsert_source(
+        &self,
+        source: &str,
+        kind: &str,
+        hash: &str,
+        chunks: usize,
+        status: &str,
+        ts: i64,
+    ) -> Result<()> {
+        self.conn()?.execute(
+            "INSERT INTO doc_sources (source, kind, hash, chunks, status, updated_ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(source) DO UPDATE SET
+               kind = excluded.kind,
+               hash = excluded.hash,
+               chunks = excluded.chunks,
+               status = excluded.status,
+               updated_ts = excluded.updated_ts",
+            params![source, kind, hash, chunks as i64, status, ts],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_source_deleted(&self, source: &str) -> Result<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE doc_chunks SET deleted = 1 WHERE source = ?1",
+            params![source],
+        )?;
+        tx.execute(
+            "UPDATE doc_sources SET status = 'deleted' WHERE source = ?1",
+            params![source],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn restore_source(&self, source: &str) -> Result<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE doc_chunks SET deleted = 0 WHERE source = ?1",
+            params![source],
+        )?;
+        tx.execute(
+            "UPDATE doc_sources SET status = 'active' WHERE source = ?1",
+            params![source],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn sources_by_kind(&self, kind: &str) -> Result<Vec<(String, String)>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT source, status FROM doc_sources WHERE kind = ?1")?;
+        let rows = stmt.query_map(params![kind], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
     pub fn docs_stats(&self) -> Result<docs::DocsStats> {
         let conn = self.conn()?;
         let chunks = conn.query_row("SELECT COUNT(*) FROM doc_chunks", [], |row| row.get(0))?;
+        let deleted =
+            conn.query_row("SELECT COUNT(*) FROM doc_chunks WHERE deleted = 1", [], |row| {
+                row.get(0)
+            })?;
         let mut stmt = conn.prepare("SELECT DISTINCT source FROM doc_chunks ORDER BY source")?;
         let sources = stmt
             .query_map([], |row| row.get(0))?
@@ -291,13 +368,18 @@ impl Db {
             .collect::<rusqlite::Result<Vec<String>>>()?;
         Ok(docs::DocsStats {
             chunks,
+            deleted,
             sources,
             models,
         })
     }
 
     pub fn clear_docs(&self) -> Result<()> {
-        self.conn()?.execute("DELETE FROM doc_chunks", [])?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM doc_chunks", [])?;
+        tx.execute("DELETE FROM doc_sources", [])?;
+        tx.commit()?;
         Ok(())
     }
 
