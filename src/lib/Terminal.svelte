@@ -28,10 +28,20 @@
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(host)
-    fit.fit()
 
     let sessionId = ''
     let ready = false
+
+    const refit = () => {
+      fit.fit()
+      if (ready && term.cols > 2) {
+        invoke('pty_resize', { sessionId, cols: term.cols, rows: term.rows }).catch(() => {})
+      }
+    }
+
+    refit()
+    requestAnimationFrame(refit)
+    document.fonts?.ready.then(refit).catch(() => {})
 
     const channel = new Channel<PtyEvent>()
     channel.onmessage = (event) => {
@@ -75,12 +85,7 @@
     let pendingResize: number | undefined
     const observer = new ResizeObserver(() => {
       window.clearTimeout(pendingResize)
-      pendingResize = window.setTimeout(() => {
-        fit.fit()
-        if (ready) {
-          invoke('pty_resize', { sessionId, cols: term.cols, rows: term.rows }).catch(() => {})
-        }
-      }, 50)
+      pendingResize = window.setTimeout(refit, 50)
     })
     observer.observe(host)
 
@@ -103,6 +108,7 @@
 <style>
   .terminal {
     flex: 1;
+    min-width: 0;
     min-height: 0;
     padding: 8px 4px 4px 10px;
     background: #12131a;
