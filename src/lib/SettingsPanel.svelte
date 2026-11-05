@@ -10,6 +10,7 @@
     baseUrl: string
     model: string
     hasKey: boolean
+    keyError: string | null
   }
 
   type DocsSettings = { baseUrl: string; model: string; autoIndex: boolean }
@@ -202,7 +203,7 @@
   function edit(provider?: ProviderView) {
     editing = provider
       ? { ...provider }
-      : { id: '', name: '', baseUrl: 'http://localhost:11434/v1', model: '', hasKey: false }
+      : { id: '', name: '', baseUrl: 'http://localhost:11434/v1', model: '', hasKey: false, keyError: null }
     apiKey = ''
     message = ''
     error = ''
@@ -243,6 +244,20 @@
     }
   }
 
+  async function removeKey(provider: ProviderView) {
+    busy = true
+    error = ''
+    try {
+      await invoke('providers_delete_key', { id: provider.id })
+      await load()
+      message = `Clé de ${provider.name} supprimée.`
+    } catch (e) {
+      error = String(e)
+    } finally {
+      busy = false
+    }
+  }
+
   async function test(provider: ProviderView) {
     busy = true
     error = ''
@@ -265,11 +280,20 @@
           <strong>{provider.name}</strong>
           <span class="muted">{provider.model}</span>
           <span class="muted url">{provider.baseUrl}</span>
-          <span class="tag">{provider.hasKey ? 'clé enregistrée' : 'sans clé'}</span>
+          <span class="tag" title={provider.keyError ?? ''}>
+            {provider.keyError
+              ? 'clé inaccessible'
+              : provider.hasKey
+                ? 'clé enregistrée'
+                : 'sans clé'}
+          </span>
         </div>
         <div class="actions">
           <button onclick={() => test(provider)} disabled={busy}>tester</button>
           <button onclick={() => edit(provider)}>modifier</button>
+          {#if provider.hasKey}
+            <button onclick={() => removeKey(provider)} disabled={busy}>supprimer la clé</button>
+          {/if}
           <button class="danger" onclick={() => remove(provider)}>supprimer</button>
         </div>
       </div>

@@ -43,6 +43,7 @@ pub fn run() {
             ipc_chat::providers_list,
             ipc_chat::providers_save,
             ipc_chat::providers_delete,
+            ipc_chat::providers_delete_key,
             ipc_chat::providers_test,
             ipc_chat::chat_send,
             ipc_chat::chat_cancel,

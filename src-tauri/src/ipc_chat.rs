@@ -26,6 +26,7 @@ pub struct ProviderView {
     #[serde(flatten)]
     config: ProviderConfig,
     has_key: bool,
+    key_error: Option<String>,
 }
 
 #[tauri::command]
@@ -33,9 +34,17 @@ pub fn providers_list(state: State<'_, AppState>) -> Result<Vec<ProviderView>, S
     let providers = state.db.list_providers().map_err(|e| format!("{e:#}"))?;
     Ok(providers
         .into_iter()
-        .map(|config| ProviderView {
-            has_key: providers::get_key(&config.id).ok().flatten().is_some(),
-            config,
+        .map(|config| match providers::get_key(&config.id) {
+            Ok(key) => ProviderView {
+                has_key: key.is_some(),
+                key_error: None,
+                config,
+            },
+            Err(error) => ProviderView {
+                has_key: false,
+                key_error: Some(format!("{error:#}")),
+                config,
+            },
         })
         .collect())
 }
@@ -61,6 +70,11 @@ pub fn providers_save(
 #[tauri::command]
 pub fn providers_delete(state: State<'_, AppState>, id: String) -> Result<(), String> {
     state.db.delete_provider(&id).map_err(|e| format!("{e:#}"))?;
+    providers::delete_key(&id).map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+pub fn providers_delete_key(id: String) -> Result<(), String> {
     providers::delete_key(&id).map_err(|e| format!("{e:#}"))
 }
 
