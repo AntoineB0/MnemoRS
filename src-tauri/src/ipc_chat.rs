@@ -225,7 +225,13 @@ async fn retrieve_docs(state: &AppState, question: &str) -> Vec<DocPassage> {
 
     let settings = crate::ipc_docs::read_settings(&state.db);
     let embedder = Embedder::new(&settings.base_url, &settings.model);
-    let vector = match embedder.embed(&[question.to_string()]).await {
+    let vector = match embedder
+        .embed_within(
+            &[question.to_string()],
+            std::time::Duration::from_secs(10),
+        )
+        .await
+    {
         Ok(mut vectors) if !vectors.is_empty() => vectors.remove(0),
         Ok(_) => return Vec::new(),
         Err(error) => {

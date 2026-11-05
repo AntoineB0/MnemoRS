@@ -16,6 +16,17 @@ impl Embedder {
 
     /// Envoie un lot de textes et renvoie les vecteurs dans l'ordre d'entrée.
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
+        self.embed_within(texts, std::time::Duration::from_secs(120))
+            .await
+    }
+
+    /// Variante avec délai court, pour ne pas bloquer une conversation quand
+    /// le service d'embeddings est lent ou en cours de chargement.
+    pub async fn embed_within(
+        &self,
+        texts: &[String],
+        timeout: std::time::Duration,
+    ) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(Vec::new());
         }
@@ -23,7 +34,7 @@ impl Embedder {
         let url = format!("{}/embeddings", self.base_url);
         let response = reqwest::Client::new()
             .post(&url)
-            .timeout(std::time::Duration::from_secs(120))
+            .timeout(timeout)
             .json(&serde_json::json!({ "model": self.model, "input": texts }))
             .send()
             .await
