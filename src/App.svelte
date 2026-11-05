@@ -1,18 +1,16 @@
 <script lang="ts">
-  // Placeholder remplacé par le terminal à l'étape suivante.
+  import Terminal from './lib/Terminal.svelte'
 </script>
 
 <main>
-  <h1>MnemoRS</h1>
+  <Terminal />
 </main>
 
 <style>
   main {
     height: 100%;
-    display: grid;
-    place-items: center;
+    display: flex;
+    flex-direction: column;
     background: #12131a;
-    color: #d6d6dd;
-    font-family: system-ui, sans-serif;
   }
 </style>
