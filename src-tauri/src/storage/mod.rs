@@ -132,6 +132,42 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Dernières commandes, de la plus ancienne à la plus récente.
+    pub fn recent(&self, limit: usize, only_failed: bool) -> Result<Vec<CommandDetail>> {
+        let conn = self.conn()?;
+        let limit = limit.clamp(1, 100) as i64;
+        let failure = if only_failed { "WHERE exit_code <> 0" } else { "" };
+        let sql = format!(
+            "SELECT id, cmd, cwd, exit_code, output_truncated, sensitive,
+                    duration_ms, ts, output
+             FROM (
+               SELECT id, cmd, cwd, exit_code, output_truncated, sensitive,
+                      duration_ms, ts, output
+               FROM commands {failure}
+               ORDER BY ts DESC
+               LIMIT ?1
+             )
+             ORDER BY ts ASC"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok(CommandDetail {
+                row: CommandRow {
+                    id: row.get(0)?,
+                    cmd: row.get(1)?,
+                    cwd: row.get(2)?,
+                    exit_code: row.get(3)?,
+                    output_truncated: row.get(4)?,
+                    sensitive: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    ts: row.get(7)?,
+                },
+                output: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn get(&self, id: i64) -> Result<Option<CommandDetail>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(

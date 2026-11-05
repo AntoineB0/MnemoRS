@@ -1,4 +1,5 @@
 mod capture;
+mod harness;
 mod ipc;
 mod ipc_chat;
 mod providers;
@@ -16,6 +17,8 @@ use tauri::Manager;
 pub struct AppState {
     pub sessions: Mutex<HashMap<String, pty::Session>>,
     pub cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub cwd: Arc<Mutex<Option<String>>>,
+    pub shell: Mutex<String>,
     pub db: Arc<storage::Db>,
     pub data_dir: PathBuf,
 }
@@ -52,6 +55,8 @@ pub fn run() {
             app.manage(AppState {
                 sessions: Mutex::new(HashMap::new()),
                 cancels: Mutex::new(HashMap::new()),
+                cwd: Arc::new(Mutex::new(None)),
+                shell: Mutex::new(String::new()),
                 db: Arc::new(db),
                 data_dir,
             });

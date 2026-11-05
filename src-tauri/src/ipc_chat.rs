@@ -8,7 +8,9 @@ use serde_json::json;
 use tauri::ipc::Channel;
 use tauri::State;
 
+use crate::harness::{self, CommandContext, ContextInput};
 use crate::providers::{self, ChatEvent, ChatMessage, ProviderConfig};
+use crate::storage::CommandDetail;
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -99,6 +101,30 @@ pub async fn chat_send(
         .ok_or("provider inconnu")?;
     let key = providers::get_key(&provider_id).map_err(|e| format!("{e:#}"))?;
 
+    let recent = state.db.recent(12, false).map_err(|e| format!("{e:#}"))?;
+    let failures = state.db.recent(5, true).map_err(|e| format!("{e:#}"))?;
+    let cwd = state.cwd.lock().ok().and_then(|slot| slot.clone());
+    let shell = state
+        .shell
+        .lock()
+        .map(|slot| slot.clone())
+        .unwrap_or_default();
+    let context = harness::build(&ContextInput {
+        cwd: cwd.as_deref(),
+        shell: if shell.is_empty() { "inconnu" } else { &shell },
+        recent: recent.into_iter().map(to_context).collect(),
+        failures: failures.into_iter().map(to_context).collect(),
+    });
+
+    let mut messages = messages;
+    messages.insert(
+        0,
+        ChatMessage {
+            role: "system".into(),
+            content: context,
+        },
+    );
+
     let cancel = Arc::new(AtomicBool::new(false));
     if let Ok(mut cancels) = state.cancels.lock() {
         cancels.insert(request_id.clone(), Arc::clone(&cancel));
@@ -134,6 +160,16 @@ pub fn chat_cancel(state: State<'_, AppState>, request_id: String) -> Result<(),
         cancel.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+fn to_context(detail: CommandDetail) -> CommandContext {
+    CommandContext {
+        cmd: detail.row.cmd,
+        cwd: detail.row.cwd,
+        exit_code: detail.row.exit_code,
+        output: detail.output,
+        ts: detail.row.ts,
+    }
 }
 
 async fn stream_chat<F>(
@@ -216,6 +252,74 @@ async fn request(
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn le_contexte_contient_l_erreur_reelle() {
+        let context = context_de_test();
+        assert!(context.contains("tar -xzf archive.tar.gz"));
+        assert!(context.contains("code 2"));
+        assert!(context.contains("No such file or directory"));
+        assert!(context.contains("/tmp"));
+    }
+
+    fn context_de_test() -> String {
+        use crate::capture::CommandRecord;
+        let db = crate::storage::Db::open_in_memory().unwrap();
+        db.ensure_session("s", "zsh", Some("/tmp"), 1).unwrap();
+        db.insert_command(
+            "s",
+            &CommandRecord {
+                cmd: "tar -xzf archive.tar.gz".into(),
+                cwd: Some("/tmp".into()),
+                exit_code: 2,
+                output: "tar: archive.tar.gz: Cannot open: No such file or directory".into(),
+                truncated: false,
+                sensitive: false,
+                duration_ms: 5,
+            },
+            10,
+        )
+        .unwrap();
+
+        let recent = db.recent(12, false).unwrap();
+        let failures = db.recent(5, true).unwrap();
+        harness::build(&ContextInput {
+            cwd: Some("/tmp"),
+            shell: "zsh",
+            recent: recent.into_iter().map(to_context).collect(),
+            failures: failures.into_iter().map(to_context).collect(),
+        })
+    }
+
+    #[tokio::test]
+    #[ignore = "nécessite Ollama en local sur le port 11434"]
+    async fn repond_sur_la_commande_echouee() {
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: context_de_test(),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: "Pourquoi ma dernière commande a échoué ?".into(),
+            },
+        ];
+        let cancel = AtomicBool::new(false);
+        let text = Arc::new(Mutex::new(String::new()));
+        let sink = Arc::clone(&text);
+
+        stream_chat(&providers::default_provider(), None, messages, &cancel, move |event| {
+            if let ChatEvent::Delta { text } = event {
+                sink.lock().unwrap().push_str(&text);
+            }
+        })
+        .await
+        .expect("stream Ollama");
+
+        let answer = text.lock().unwrap().clone();
+        println!("réponse : {answer}");
+        assert!(!answer.trim().is_empty(), "réponse vide");
+    }
 
     #[tokio::test]
     #[ignore = "nécessite Ollama en local sur le port 11434"]

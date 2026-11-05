@@ -118,6 +118,10 @@ impl Capture {
         }
     }
 
+    pub fn cwd(&self) -> Option<&str> {
+        self.cwd.as_deref()
+    }
+
     fn push_output(&mut self, text: &str) {
         self.output.push_str(text);
         if self.output.len() > MAX_BUFFER {

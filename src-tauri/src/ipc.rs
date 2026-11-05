@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
@@ -13,20 +13,32 @@ struct Tap {
     db: Arc<storage::Db>,
     session_id: String,
     app: AppHandle,
+    cwd: Arc<Mutex<Option<String>>>,
 }
 
 impl Tap {
-    fn new(db: Arc<storage::Db>, session_id: String, app: AppHandle) -> Self {
+    fn new(
+        db: Arc<storage::Db>,
+        session_id: String,
+        app: AppHandle,
+        cwd: Arc<Mutex<Option<String>>>,
+    ) -> Self {
         Self {
             capture: Capture::default(),
             db,
             session_id,
             app,
+            cwd,
         }
     }
 
     fn process(&mut self, input: &str) -> String {
         let (visible, records) = self.capture.feed(input);
+        if let Some(cwd) = self.capture.cwd() {
+            if let Ok(mut slot) = self.cwd.lock() {
+                *slot = Some(cwd.to_string());
+            }
+        }
         for record in records {
             match self
                 .db
@@ -64,7 +76,15 @@ pub fn pty_spawn(
         .ensure_session(&session_id, &shell, cwd.as_deref(), storage::now_ms())
         .map_err(|error| format!("{error:#}"))?;
 
-    let mut tap = Tap::new(Arc::clone(&state.db), session_id.clone(), app);
+    if let Ok(mut shell_slot) = state.shell.lock() {
+        *shell_slot = shell.clone();
+    }
+    let mut tap = Tap::new(
+        Arc::clone(&state.db),
+        session_id.clone(),
+        app,
+        Arc::clone(&state.cwd),
+    );
     let emit = move |event| on_event.send(event).is_ok();
     let session = pty::spawn(
         &shell,
