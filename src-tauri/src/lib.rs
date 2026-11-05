@@ -1,5 +1,6 @@
 mod capture;
 mod ipc;
+mod providers;
 mod pty;
 mod shell;
 mod storage;
