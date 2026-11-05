@@ -147,12 +147,15 @@
       onactivate()
       terminal.focus()
     }
+    const activate = () => onactivate()
     host.addEventListener('click', focus)
+    host.addEventListener('focusin', activate)
     terminal.focus()
 
     return () => {
       observer.disconnect()
       host.removeEventListener('click', focus)
+      host.removeEventListener('focusin', activate)
       dataListener.dispose()
       if (sessionId) invoke('pty_kill', { sessionId }).catch(() => {})
       terminal.dispose()
