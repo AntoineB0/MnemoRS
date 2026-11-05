@@ -71,11 +71,7 @@
 
 <div class="workspace">
   {#each panes as pane (pane.key)}
-    <section
-      class="pane"
-      class:split={panes.length > 1}
-      class:active={pane.key === activePane}
-    >
+    <section class="pane" class:split={panes.length > 1}>
       <header class="tabs">
         {#each pane.tabs as tab (tab.key)}
           <div class="tab" class:active={tab.key === pane.active}>
@@ -140,10 +136,6 @@
     border: 1px solid var(--line);
   }
 
-  .pane.split.active {
-    border-color: var(--signal);
-  }
-
   .tabs {
     display: flex;
     align-items: stretch;
@@ -163,8 +155,7 @@
 
   .tab.active {
     background: var(--void);
-    color: var(--ink);
-    box-shadow: inset 0 2px 0 var(--signal);
+    color: var(--signal);
   }
 
   .tab .label {
