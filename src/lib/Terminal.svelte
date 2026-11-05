@@ -12,13 +12,40 @@
     | { type: 'exit'; code: number | null }
     | { type: 'error'; message: string }
 
+  let { active = true, onactivate = () => {} }: { active?: boolean; onactivate?: () => void } =
+    $props()
+
   let host: HTMLDivElement
   let term: Xterm | undefined
   let exited = $state(false)
   let restart = $state<() => void>(() => {})
+  let refit = () => {}
+  let sessionId = ''
+  let ready = false
 
   $effect(() => {
     if (term) term.options.theme = terminalTheme(theme.current)
+  })
+
+  // Seul le terminal actif reçoit les insertions venant du chat.
+  $effect(() => {
+    if (!active) return
+    return registerTerminalInsert((text) => {
+      if (!ready) return
+      invoke('pty_write', { sessionId, data: text }).catch(() => {})
+      term?.focus()
+    })
+  })
+
+  // Un terminal caché n'a pas de taille : on le réajuste en devenant actif.
+  $effect(() => {
+    if (!active) return
+    requestAnimationFrame(() => {
+      if (!term) return
+      refit()
+      if (sessionId) invoke('pty_activate', { sessionId }).catch(() => {})
+      term.focus()
+    })
   })
 
   onMount(() => {
@@ -35,19 +62,12 @@
     terminal.loadAddon(fit)
     terminal.open(host)
 
-    let sessionId = ''
-    let ready = false
-
-    const unregister = registerTerminalInsert((text) => {
-      if (!ready) return
-      invoke('pty_write', { sessionId, data: text }).catch(() => {})
-      terminal.focus()
-    })
-
-    const refit = () => {
+    refit = () => {
       fit.fit()
       if (ready && terminal.cols > 2) {
-        invoke('pty_resize', { sessionId, cols: terminal.cols, rows: terminal.rows }).catch(() => {})
+        invoke('pty_resize', { sessionId, cols: terminal.cols, rows: terminal.rows }).catch(
+          () => {},
+        )
       }
     }
 
@@ -79,6 +99,8 @@
         .then((id) => {
           sessionId = id
           ready = true
+          if (active) invoke('pty_activate', { sessionId }).catch(() => {})
+          refit()
           terminal.focus()
         })
         .catch((error) =>
@@ -115,17 +137,20 @@
 
     let pendingResize: number | undefined
     const observer = new ResizeObserver(() => {
+      if (!active) return
       window.clearTimeout(pendingResize)
       pendingResize = window.setTimeout(refit, 50)
     })
     observer.observe(host)
 
-    const focus = () => terminal.focus()
+    const focus = () => {
+      onactivate()
+      terminal.focus()
+    }
     host.addEventListener('click', focus)
     terminal.focus()
 
     return () => {
-      unregister()
       observer.disconnect()
       host.removeEventListener('click', focus)
       dataListener.dispose()
@@ -176,9 +201,5 @@
   .restart:hover {
     border-color: var(--signal);
     color: var(--signal);
-  }
-
-  :global(.xterm) {
-    height: 100%;
   }
 </style>

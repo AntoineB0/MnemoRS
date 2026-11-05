@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Terminal from './lib/Terminal.svelte'
+  import Workspace from './lib/Workspace.svelte'
   import Sidebar from './lib/Sidebar.svelte'
   import { loadTheme } from './lib/theme.svelte'
 
@@ -7,7 +7,7 @@
 </script>
 
 <main class="layout">
-  <Terminal />
+  <Workspace />
   <Sidebar />
 </main>
 
