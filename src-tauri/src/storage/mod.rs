@@ -13,9 +13,11 @@ const MIGRATIONS: &[&str] = &[
     include_str!("providers.sql"),
     include_str!("docs.sql"),
     include_str!("docs_sync.sql"),
+    include_str!("fixes.sql"),
 ];
 
 pub mod docs;
+pub mod fixes;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -420,6 +422,142 @@ impl Db {
         Ok(())
     }
 
+    pub fn insert_fix(
+        &self,
+        failed_cmd_id: i64,
+        fix_cmd_id: i64,
+        confidence: f32,
+        status: &str,
+        origin: &str,
+        ts: i64,
+    ) -> Result<()> {
+        self.conn()?.execute(
+            "INSERT OR IGNORE INTO fixes
+               (failed_cmd_id, fix_cmd_id, confidence, status, origin, created_ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![failed_cmd_id, fix_cmd_id, confidence, status, origin, ts],
+        )?;
+        Ok(())
+    }
+
+    pub fn fix_for_command(&self, cmd_id: i64) -> Result<Option<fixes::FixRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT f.id, f.failed_cmd_id, f.fix_cmd_id, cf.cmd, cx.cmd, cx.cwd,
+                    f.confidence, f.status, f.created_ts
+             FROM fixes f
+             JOIN commands cf ON cf.id = f.failed_cmd_id
+             JOIN commands cx ON cx.id = f.fix_cmd_id
+             WHERE f.failed_cmd_id = ?1 AND f.status <> 'rejected'
+             ORDER BY f.confidence DESC
+             LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![cmd_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(fixes::FixRow {
+            id: row.get(0)?,
+            failed_cmd_id: row.get(1)?,
+            fix_cmd_id: row.get(2)?,
+            failed_cmd: row.get(3)?,
+            fix_cmd: row.get(4)?,
+            cwd: row.get(5)?,
+            confidence: row.get(6)?,
+            status: row.get(7)?,
+            ts: row.get(8)?,
+        }))
+    }
+
+    pub fn pending_fixes(&self, limit: usize) -> Result<Vec<fixes::FixRow>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT f.id, f.failed_cmd_id, f.fix_cmd_id, cf.cmd, cx.cmd, cx.cwd,
+                    f.confidence, f.status, f.created_ts
+             FROM fixes f
+             JOIN commands cf ON cf.id = f.failed_cmd_id
+             JOIN commands cx ON cx.id = f.fix_cmd_id
+             WHERE f.status = 'suggested'
+             ORDER BY f.confidence DESC, f.created_ts DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], map_fix)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn set_fix_status(&self, id: i64, status: &str) -> Result<()> {
+        self.conn()?.execute(
+            "UPDATE fixes SET status = ?2 WHERE id = ?1",
+            params![id, status],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_fix(&self, id: i64) -> Result<()> {
+        self.conn()?
+            .execute("DELETE FROM fixes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Corrections confirmées dont la commande échouée ressemble à `cmd`.
+    pub fn similar_fixes(
+        &self,
+        cmd: &str,
+        exclude_failed_id: i64,
+        limit: usize,
+    ) -> Result<Vec<fixes::FixExample>> {
+        let query = fts_or_query(cmd);
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT cf.cmd, cx.cmd, cx.cwd
+             FROM fixes f
+             JOIN commands cf ON cf.id = f.failed_cmd_id
+             JOIN commands cx ON cx.id = f.fix_cmd_id
+             WHERE f.status IN ('auto', 'confirmed')
+               AND f.failed_cmd_id <> ?2
+               AND f.failed_cmd_id IN (
+                 SELECT rowid FROM commands_fts WHERE commands_fts MATCH ?1
+               )
+             ORDER BY f.confidence DESC, f.created_ts DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![query, exclude_failed_id, limit as i64], |row| {
+            Ok(fixes::FixExample {
+                failed_cmd: row.get(0)?,
+                fix_cmd: row.get(1)?,
+                cwd: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn backfill_commands(&self, limit: usize) -> Result<Vec<fixes::BackfillCommand>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, cmd, cwd, exit_code, ts FROM (
+               SELECT id, session_id, cmd, cwd, exit_code, ts
+               FROM commands
+               ORDER BY ts DESC
+               LIMIT ?1
+             )
+             ORDER BY ts ASC",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(fixes::BackfillCommand {
+                id: row.get(0)?,
+                session_id: row.get(1)?,
+                cmd: row.get(2)?,
+                cwd: row.get(3)?,
+                exit_code: row.get(4)?,
+                ts: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn list_providers(&self) -> Result<Vec<ProviderConfig>> {
         let conn = self.conn()?;
         let mut stmt =
@@ -510,6 +648,36 @@ fn fts_query(input: &str) -> String {
         .map(|token| format!("{token}*"))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn map_fix(row: &rusqlite::Row<'_>) -> rusqlite::Result<fixes::FixRow> {
+    Ok(fixes::FixRow {
+        id: row.get(0)?,
+        failed_cmd_id: row.get(1)?,
+        fix_cmd_id: row.get(2)?,
+        failed_cmd: row.get(3)?,
+        fix_cmd: row.get(4)?,
+        cwd: row.get(5)?,
+        confidence: row.get(6)?,
+        status: row.get(7)?,
+        ts: row.get(8)?,
+    })
+}
+
+/// Requête FTS en OR : on veut les commandes proches, pas identiques.
+fn fts_or_query(input: &str) -> String {
+    input
+        .split_whitespace()
+        .map(|token| {
+            token
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .filter(|token| !token.is_empty())
+        .map(|token| format!("{token}*"))
+        .collect::<Vec<_>>()
+        .join(" OR ")
 }
 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommandRow> {
@@ -720,6 +888,51 @@ mod tests {
         db.insert_command("pty-1", &record("/usr/bin/git status", "", 0), 20).unwrap();
         db.insert_command("pty-1", &record("tar -tzf a.tgz", "", 0), 30).unwrap();
         assert_eq!(db.tool_names().unwrap(), vec!["git".to_string(), "tar".to_string()]);
+    }
+
+    #[test]
+    fn corrections_similaires_retrouvees() {
+        let db = db();
+        let failed = db
+            .insert_command("pty-1", &record("tar -xzf a.tgz", "", 2), 10)
+            .unwrap();
+        let fixed = db
+            .insert_command("pty-1", &record("tar -xJf a.tar.xz", "", 0), 20)
+            .unwrap();
+        db.insert_fix(failed, fixed, 0.99, "auto", "live", 20).unwrap();
+
+        let found = db.similar_fixes("tar -xzf b.tgz", 999, 5).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].fix_cmd, "tar -xJf a.tar.xz");
+
+        assert!(db
+            .similar_fixes("tar -xzf b.tgz", failed, 5)
+            .unwrap()
+            .is_empty());
+
+        let fix = db.fix_for_command(failed).unwrap().unwrap();
+        assert_eq!(fix.status, "auto");
+        db.set_fix_status(fix.id, "rejected").unwrap();
+        assert!(db
+            .similar_fixes("tar -xzf b.tgz", 999, 5)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn suggestions_en_attente_isolees() {
+        let db = db();
+        let failed = db
+            .insert_command("pty-1", &record("python app.py", "", 1), 10)
+            .unwrap();
+        let fixed = db
+            .insert_command("pty-1", &record("pip install requests", "", 0), 20)
+            .unwrap();
+        db.insert_fix(failed, fixed, 0.7, "suggested", "live", 20)
+            .unwrap();
+
+        assert_eq!(db.pending_fixes(10).unwrap().len(), 1);
+        assert!(db.similar_fixes("python app.py", 999, 5).unwrap().is_empty());
     }
 
     #[test]

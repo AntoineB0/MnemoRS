@@ -9,7 +9,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 
 use crate::docs::{self, Embedder};
-use crate::harness::{self, CommandContext, ContextInput, DocPassage};
+use crate::harness::{self, CommandContext, ContextInput, DocPassage, FixPassage};
 use crate::providers::{self, ChatEvent, ChatMessage, ProviderConfig};
 use crate::storage::CommandDetail;
 use crate::AppState;
@@ -113,6 +113,7 @@ pub async fn chat_send(
 
     let recent = state.db.recent(12, false).map_err(|e| format!("{e:#}"))?;
     let failures = state.db.recent(5, true).map_err(|e| format!("{e:#}"))?;
+    let fix_passages = similar_fixes(&state, &failures);
     let cwd = state.cwd.lock().ok().and_then(|slot| slot.clone());
     let shell = state
         .shell
@@ -125,6 +126,7 @@ pub async fn chat_send(
         recent: recent.into_iter().map(to_context).collect(),
         failures: failures.into_iter().map(to_context).collect(),
         docs: doc_passages,
+        fixes: fix_passages,
     });
 
     let mut messages = messages;
@@ -171,6 +173,39 @@ pub fn chat_cancel(state: State<'_, AppState>, request_id: String) -> Result<(),
         cancel.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// Corrections confirmées pour les échecs récents, dédupliquées par correction.
+fn similar_fixes(state: &AppState, failures: &[CommandDetail]) -> Vec<FixPassage> {
+    const MAX: usize = 3;
+    let mut passages: Vec<FixPassage> = Vec::new();
+
+    for failure in failures {
+        if passages.len() >= MAX {
+            break;
+        }
+        let Ok(examples) = state
+            .db
+            .similar_fixes(&failure.row.cmd, failure.row.id, 2)
+        else {
+            continue;
+        };
+        for example in examples {
+            if passages.iter().any(|passage| passage.fix == example.fix_cmd) {
+                continue;
+            }
+            passages.push(FixPassage {
+                failed: example.failed_cmd,
+                fix: example.fix_cmd,
+                cwd: example.cwd,
+            });
+            if passages.len() >= MAX {
+                break;
+            }
+        }
+    }
+
+    passages
 }
 
 /// Recherche documentaire ; toute panne est journalisée et n'empêche pas
@@ -339,6 +374,7 @@ mod tests {
             recent: recent.into_iter().map(to_context).collect(),
             failures: failures.into_iter().map(to_context).collect(),
             docs: Vec::new(),
+            fixes: Vec::new(),
         })
     }
 

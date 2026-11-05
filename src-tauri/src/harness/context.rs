@@ -18,12 +18,21 @@ pub struct DocPassage {
     pub deleted: bool,
 }
 
+/// Correction déjà utilisée par le passé pour une commande similaire.
+#[derive(Debug, Clone)]
+pub struct FixPassage {
+    pub failed: String,
+    pub fix: String,
+    pub cwd: Option<String>,
+}
+
 pub struct ContextInput<'a> {
     pub cwd: Option<&'a str>,
     pub shell: &'a str,
     pub recent: Vec<CommandContext>,
     pub failures: Vec<CommandContext>,
     pub docs: Vec<DocPassage>,
+    pub fixes: Vec<FixPassage>,
 }
 
 /// Budget approximatif en caractères (aucun tokenizer : ~4 caractères/token).
@@ -91,6 +100,23 @@ pub fn build(input: &ContextInput) -> String {
             out.push_str(&format!("\n[{}]\n", doc_label(doc)));
             out.push_str(&doc.content);
             out.push('\n');
+        }
+    }
+
+    if !input.fixes.is_empty() {
+        out.push_str("\n## Corrections déjà utilisées\n");
+        out.push_str("Ces corrections ont fonctionné par la suite dans des situations similaires.\n");
+        for fix in &input.fixes {
+            let cost = fix.failed.len() + fix.fix.len() + 80;
+            if used + cost > BUDGET_CHARS {
+                break;
+            }
+            used += cost;
+            out.push_str(&format!("\n```\n$ {}\n```\n", fix.failed.trim()));
+            if let Some(cwd) = &fix.cwd {
+                out.push_str(&format!("(dossier {cwd})\n"));
+            }
+            out.push_str(&format!("```\n$ {}\n```\n", fix.fix.trim()));
         }
     }
 
@@ -185,6 +211,7 @@ mod tests {
             recent,
             failures,
             docs: Vec::new(),
+            fixes: Vec::new(),
         }
     }
 
@@ -295,6 +322,20 @@ mod tests {
         assert!(prompt.len() <= BUDGET_CHARS + 2000);
         assert!(prompt.contains("doc:0"));
         assert!(!prompt.contains("doc:49"));
+    }
+
+    #[test]
+    fn corrections_passees_injectees() {
+        let mut context = input(vec![command("tar -xzf a.tgz", "", 2)], vec![]);
+        context.fixes = vec![FixPassage {
+            failed: "tar -xzf a.tgz".into(),
+            fix: "tar -xJf a.tar.xz".into(),
+            cwd: Some("/home/moi".into()),
+        }];
+        let prompt = build(&context);
+        assert!(prompt.contains("## Corrections déjà utilisées"));
+        assert!(prompt.contains("$ tar -xzf a.tgz"));
+        assert!(prompt.contains("$ tar -xJf a.tar.xz"));
     }
 
     #[test]

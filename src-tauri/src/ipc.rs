@@ -5,7 +5,8 @@ use std::time::Duration;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::capture::Capture;
+use crate::capture::{Capture, CommandRecord};
+use crate::fixes;
 use crate::pty::{self, PtyEvent};
 use crate::{storage, AppState};
 
@@ -18,6 +19,7 @@ struct Tap {
     cwd: Arc<Mutex<Option<String>>>,
     ingest_running: Arc<AtomicBool>,
     cwd_generation: Arc<AtomicU64>,
+    pending_failure: Option<fixes::PendingFix>,
 }
 
 impl Tap {
@@ -37,6 +39,49 @@ impl Tap {
             cwd,
             ingest_running,
             cwd_generation,
+            pending_failure: None,
+        }
+    }
+
+    /// Repère qu'une commande réussie corrige l'échec précédent. Une commande
+    /// de bruit ne consomme pas l'échec en attente : la vraie correction suit.
+    fn track_fix(&mut self, id: i64, record: &CommandRecord) {
+        let settings = fixes::settings(&self.db);
+        let ts = storage::now_ms();
+
+        if record.exit_code != 0 {
+            if !fixes::is_noise(&record.cmd) {
+                self.pending_failure = Some(fixes::PendingFix {
+                    id,
+                    cmd: record.cmd.clone(),
+                    cwd: record.cwd.clone(),
+                    ts,
+                });
+            }
+            return;
+        }
+
+        let Some(pending) = self.pending_failure.take() else {
+            return;
+        };
+        match fixes::evaluate(
+            &pending,
+            &record.cmd,
+            record.cwd.as_deref(),
+            record.exit_code,
+            ts,
+            &settings,
+        ) {
+            fixes::Decision::Keep => self.pending_failure = Some(pending),
+            fixes::Decision::Fix { confidence, status } => {
+                if let Err(error) = self
+                    .db
+                    .insert_fix(pending.id, id, confidence, status, "live", ts)
+                {
+                    log::warn!("correction non enregistrée : {error:#}");
+                }
+            }
+            fixes::Decision::Drop => {}
         }
     }
 
@@ -101,6 +146,7 @@ impl Tap {
                         record.cmd,
                         record.exit_code
                     );
+                    self.track_fix(id, &record);
                     let _ = self.app.emit("history:new", id);
                 }
                 Err(error) => log::error!("enregistrement impossible : {error:#}"),

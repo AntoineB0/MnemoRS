@@ -1,9 +1,11 @@
 mod capture;
 mod docs;
+mod fixes;
 mod harness;
 mod ipc;
 mod ipc_chat;
 mod ipc_docs;
+mod ipc_fixes;
 mod providers;
 mod pty;
 mod shell;
@@ -48,12 +50,24 @@ pub fn run() {
             ipc_docs::docs_stats,
             ipc_docs::docs_clear,
             ipc_docs::docs_ingest,
+            ipc_fixes::fixes_settings,
+            ipc_fixes::fixes_set_settings,
+            ipc_fixes::fixes_pending,
+            ipc_fixes::fixes_for,
+            ipc_fixes::fixes_set_status,
+            ipc_fixes::fixes_delete,
         ])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
             let db = storage::Db::open(&data_dir.join("mnemors.db"))
                 .map_err(|error| format!("{error:#}"))?;
+
+            match fixes::backfill(&db, 5_000) {
+                Ok(0) => {}
+                Ok(count) => log::info!("rattrapage : {count} corrections trouvées dans l'historique"),
+                Err(error) => log::warn!("rattrapage des corrections : {error:#}"),
+            }
 
             if db.list_providers().map(|list| list.is_empty()).unwrap_or(false) {
                 let provider = providers::default_provider();
