@@ -105,13 +105,22 @@ impl Tap {
             }
             let _ = app.emit("docs:indexing", true);
             match crate::ipc_docs::auto_sync(app.clone(), db, cwd).await {
-                Ok(report) if report.indexed > 0 || report.deleted > 0 => log::info!(
-                    "indexation auto : {} réindexés, {} supprimés, {} chunks",
-                    report.indexed,
-                    report.deleted,
-                    report.chunks
-                ),
-                Ok(_) => {}
+                Ok(report) => {
+                    if report.indexed > 0 || report.deleted > 0 {
+                        log::info!(
+                            "indexation auto : {} réindexés, {} supprimés, {} chunks",
+                            report.indexed,
+                            report.deleted,
+                            report.chunks
+                        );
+                    }
+                    if report.failed > 0 {
+                        log::warn!(
+                            "indexation auto : {} source(s) en échec",
+                            report.failed
+                        );
+                    }
+                }
                 Err(error) => log::warn!("indexation automatique : {error:#}"),
             }
             let _ = app.emit("docs:indexing", false);

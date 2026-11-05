@@ -20,6 +20,7 @@
     restored: number
     deleted: number
     chunks: number
+    failed: number
   }
   type FixSettings = { windowMinutes: number; autoThreshold: number; suggestThreshold: number }
   type FixRow = {
@@ -175,6 +176,7 @@
             `${report.indexed} source(s) indexée(s), ${report.skipped} inchangée(s)` +
             (report.restored ? `, ${report.restored} restaurée(s)` : '') +
             (report.deleted ? `, ${report.deleted} supprimée(s)` : '') +
+            (report.failed ? `, ${report.failed} en échec` : '') +
             ` — ${report.chunks} chunks.`
         }
       }
