@@ -305,4 +305,18 @@ mod tests {
         assert!(detail.row.sensitive);
         assert!(detail.row.output_truncated);
     }
+
+    #[test]
+    fn serialisation_attendue_par_le_frontend() {
+        let db = db();
+        let id = db
+            .insert_command("pty-1", &record("ls", "sortie", 0), 10)
+            .unwrap();
+        let detail = db.get(id).unwrap().unwrap();
+        let json = serde_json::to_value(&detail).unwrap();
+
+        for key in ["id", "cmd", "cwd", "exitCode", "durationMs", "ts", "output"] {
+            assert!(json.get(key).is_some(), "clé manquante : {key}");
+        }
+    }
 }

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tauri::ipc::Channel;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::capture::Capture;
 use crate::pty::{self, PtyEvent};
@@ -12,14 +12,16 @@ struct Tap {
     capture: Capture,
     db: Arc<storage::Db>,
     session_id: String,
+    app: AppHandle,
 }
 
 impl Tap {
-    fn new(db: Arc<storage::Db>, session_id: String) -> Self {
+    fn new(db: Arc<storage::Db>, session_id: String, app: AppHandle) -> Self {
         Self {
             capture: Capture::default(),
             db,
             session_id,
+            app,
         }
     }
 
@@ -30,11 +32,14 @@ impl Tap {
                 .db
                 .insert_command(&self.session_id, &record, storage::now_ms())
             {
-                Ok(id) => log::info!(
-                    "commande #{id} : {} (code {})",
-                    record.cmd,
-                    record.exit_code
-                ),
+                Ok(id) => {
+                    log::info!(
+                        "commande #{id} : {} (code {})",
+                        record.cmd,
+                        record.exit_code
+                    );
+                    let _ = self.app.emit("history:new", id);
+                }
                 Err(error) => log::error!("enregistrement impossible : {error:#}"),
             }
         }
@@ -44,6 +49,7 @@ impl Tap {
 
 #[tauri::command]
 pub fn pty_spawn(
+    app: AppHandle,
     state: State<'_, AppState>,
     cols: u16,
     rows: u16,
@@ -58,7 +64,7 @@ pub fn pty_spawn(
         .ensure_session(&session_id, &shell, cwd.as_deref(), storage::now_ms())
         .map_err(|error| format!("{error:#}"))?;
 
-    let mut tap = Tap::new(Arc::clone(&state.db), session_id.clone());
+    let mut tap = Tap::new(Arc::clone(&state.db), session_id.clone(), app);
     let emit = move |event| on_event.send(event).is_ok();
     let session = pty::spawn(
         &shell,
@@ -77,6 +83,27 @@ pub fn pty_spawn(
         .map_err(|_| "état des sessions verrouillé".to_string())?;
     sessions.insert(session_id.clone(), session);
     Ok(session_id)
+}
+
+#[tauri::command]
+pub fn history_search(
+    state: State<'_, AppState>,
+    query: String,
+    limit: Option<usize>,
+    only_failed: Option<bool>,
+) -> Result<Vec<storage::CommandRow>, String> {
+    state
+        .db
+        .search(&query, limit.unwrap_or(200), only_failed.unwrap_or(false))
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
+pub fn history_get(
+    state: State<'_, AppState>,
+    id: i64,
+) -> Result<Option<storage::CommandDetail>, String> {
+    state.db.get(id).map_err(|error| format!("{error:#}"))
 }
 
 #[tauri::command]

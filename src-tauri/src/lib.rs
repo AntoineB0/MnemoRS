@@ -24,6 +24,8 @@ pub fn run() {
             ipc::pty_write,
             ipc::pty_resize,
             ipc::pty_kill,
+            ipc::history_search,
+            ipc::history_get,
         ])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;

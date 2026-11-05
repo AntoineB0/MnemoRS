@@ -1,16 +1,17 @@
 <script lang="ts">
   import Terminal from './lib/Terminal.svelte'
+  import HistoryPanel from './lib/HistoryPanel.svelte'
 </script>
 
-<main>
+<main class="layout">
   <Terminal />
+  <HistoryPanel />
 </main>
 
 <style>
-  main {
+  .layout {
     height: 100%;
     display: flex;
-    flex-direction: column;
     background: #12131a;
   }
 </style>
