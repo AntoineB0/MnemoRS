@@ -96,7 +96,7 @@
         <span class="spacer"></span>
         {#if panes.length < 2}
           <button class="icon" title="découper l'affichage" onclick={splitPane}>
-            ▥
+            ◫
           </button>
         {:else}
           <button class="icon" title="fermer le panneau" onclick={() => closePane(pane.key)}>
