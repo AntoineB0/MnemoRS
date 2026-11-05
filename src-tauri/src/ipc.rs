@@ -13,7 +13,8 @@ pub fn pty_spawn(
     on_event: Channel<PtyEvent>,
 ) -> Result<String, String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    let (id, session) = pty::spawn(&shell, cwd.as_deref(), cols, rows, on_event)
+    let emit = move |event| on_event.send(event).is_ok();
+    let (id, session) = pty::spawn(&shell, cwd.as_deref(), cols, rows, emit)
         .map_err(|e| format!("impossible de lancer {shell}: {e:#}"))?;
 
     let mut sessions = state

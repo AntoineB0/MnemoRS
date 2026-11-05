@@ -6,7 +6,6 @@ use std::thread;
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
-use tauri::ipc::Channel;
 
 mod utf8;
 use utf8::Utf8Chunker;
@@ -54,14 +53,18 @@ impl Session {
     }
 }
 
-/// Lance `shell` dans un pseudo-terminal et pousse sa sortie dans `channel`.
-pub fn spawn(
+/// Lance `shell` dans un pseudo-terminal et émet sa sortie via `emit`.
+/// `emit` est découplé de Tauri pour permettre de tester le PTY seul.
+pub fn spawn<F>(
     shell: &str,
     cwd: Option<&str>,
     cols: u16,
     rows: u16,
-    channel: Channel<PtyEvent>,
-) -> Result<(String, Session)> {
+    emit: F,
+) -> Result<(String, Session)>
+where
+    F: Fn(PtyEvent) -> bool + Clone + Send + 'static,
+{
     let pair = native_pty_system().openpty(PtySize {
         rows: rows.max(1),
         cols: cols.max(1),
@@ -87,7 +90,7 @@ pub fn spawn(
     let writer = pair.master.take_writer()?;
     let killer = child.clone_killer();
 
-    let data_channel = channel.clone();
+    let data_emit = emit.clone();
     thread::Builder::new()
         .name("pty-reader".into())
         .spawn(move || {
@@ -98,23 +101,19 @@ pub fn spawn(
                     Ok(0) => break,
                     Ok(n) => {
                         let text = chunker.push(&buf[..n]);
-                        if !text.is_empty()
-                            && data_channel.send(PtyEvent::Data { chunk: text }).is_err()
-                        {
+                        if !text.is_empty() && !data_emit(PtyEvent::Data { chunk: text }) {
                             break;
                         }
                     }
                     Err(e) => {
-                        let _ = data_channel.send(PtyEvent::Error {
-                            message: e.to_string(),
-                        });
+                        let _ = data_emit(PtyEvent::Error { message: e.to_string() });
                         break;
                     }
                 }
             }
             let tail = chunker.flush();
             if !tail.is_empty() {
-                let _ = data_channel.send(PtyEvent::Data { chunk: tail });
+                let _ = data_emit(PtyEvent::Data { chunk: tail });
             }
         })?;
 
@@ -122,7 +121,7 @@ pub fn spawn(
         .name("pty-waiter".into())
         .spawn(move || {
             let code = child.wait().ok().map(|status| status.exit_code());
-            let _ = channel.send(PtyEvent::Exit { code });
+            let _ = emit(PtyEvent::Exit { code });
         })?;
 
     let id = format!("pty-{}", NEXT_ID.fetch_add(1, Ordering::Relaxed));
@@ -134,4 +133,38 @@ pub fn spawn(
             killer,
         },
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex as StdMutex};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn lance_un_shell_et_recupere_la_sortie() {
+        let output = Arc::new(StdMutex::new(String::new()));
+        let sink = output.clone();
+        let emit = move |event: PtyEvent| {
+            if let PtyEvent::Data { chunk } = event {
+                sink.lock().unwrap().push_str(&chunk);
+            }
+            true
+        };
+
+        let (_, mut session) = spawn("/bin/sh", None, 80, 24, emit).expect("spawn du shell");
+        session.write(b"echo hello-pty\n").expect("écriture");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if output.lock().unwrap().contains("hello-pty") {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        session.kill();
+        let seen = output.lock().unwrap().clone();
+        assert!(seen.contains("hello-pty"), "sortie reçue : {seen:?}");
+    }
 }
