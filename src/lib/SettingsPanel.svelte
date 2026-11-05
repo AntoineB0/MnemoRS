@@ -454,6 +454,7 @@
     padding: 12px;
     overflow-y: auto;
     height: 100%;
+    min-height: 0;
     font-family: var(--mono);
     font-size: 12px;
     color: var(--ink);
