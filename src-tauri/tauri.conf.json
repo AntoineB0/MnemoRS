@@ -27,7 +27,9 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "rpm"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -37,6 +39,9 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
-    }
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "Terminal avec assistant IA",
+    "longDescription": "Emulateur de terminal avec un assistant IA qui connait l'historique des commandes."
   }
 }

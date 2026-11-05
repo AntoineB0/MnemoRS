@@ -56,6 +56,25 @@ npm run tauri build
 
 Le binaire et les paquets sont produits dans `src-tauri/target/release/bundle`.
 
+## Installation sur le système (Fedora)
+
+```bash
+npm run tauri build
+sudo dnf install src-tauri/target/release/bundle/rpm/MnemoRS-*.rpm
+```
+
+L'application apparaît ensuite dans le menu des applications sous le nom
+**MnemoRS** (catégorie Développement). Le paquet installe le binaire dans
+`/usr/bin/MnemoRS`, l'icône et l'entrée de bureau.
+
+Désinstallation :
+
+```bash
+sudo dnf remove MnemoRS
+```
+
+Les données (`~/.local/share/com.icetech.mnemors`) ne sont pas supprimées.
+
 ## Vérifications
 
 ```bash
