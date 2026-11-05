@@ -90,20 +90,18 @@
 </script>
 
 <aside class="panel">
-  <header>
-    <h2>Historique</h2>
+  <div class="filters">
+    <input
+      class="search"
+      type="search"
+      placeholder="Rechercher commande ou sortie…"
+      bind:value={query}
+    />
     <label>
       <input type="checkbox" bind:checked={onlyFailed} />
       échecs
     </label>
-  </header>
-
-  <input
-    class="search"
-    type="search"
-    placeholder="Rechercher commande ou sortie…"
-    bind:value={query}
-  />
+  </div>
 
   {#if error}
     <p class="error">{error}</p>
@@ -145,30 +143,20 @@
 
 <style>
   .panel {
-    width: 380px;
-    min-width: 300px;
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    background: #171821;
-    border-left: 1px solid #2a2b38;
     color: #d6d6dd;
     font-size: 13px;
   }
 
-  header {
+  .filters {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 10px 12px;
+    gap: 8px;
+    padding: 8px 12px;
     border-bottom: 1px solid #2a2b38;
-  }
-
-  h2 {
-    margin: 0;
-    font: 600 12px/1 system-ui, sans-serif;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #9b9bab;
   }
 
   label {
@@ -177,11 +165,13 @@
     align-items: center;
     color: #9b9bab;
     font-size: 11px;
+    white-space: nowrap;
     cursor: pointer;
   }
 
   .search {
-    margin: 8px 12px;
+    flex: 1;
+    min-width: 0;
     padding: 6px 8px;
     background: #0f1016;
     border: 1px solid #2a2b38;

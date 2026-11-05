@@ -1,11 +1,11 @@
 <script lang="ts">
   import Terminal from './lib/Terminal.svelte'
-  import HistoryPanel from './lib/HistoryPanel.svelte'
+  import Sidebar from './lib/Sidebar.svelte'
 </script>
 
 <main class="layout">
   <Terminal />
-  <HistoryPanel />
+  <Sidebar />
 </main>
 
 <style>
