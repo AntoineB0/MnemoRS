@@ -3,6 +3,7 @@
   import { Channel, invoke } from '@tauri-apps/api/core'
   import { openUrl } from '@tauri-apps/plugin-opener'
   import MarkdownIt from 'markdown-it'
+  import { insertIntoTerminal } from './terminal-bridge'
 
   type ProviderView = {
     id: string
@@ -26,6 +27,8 @@
   let input = $state('')
   let streaming = $state(false)
   let error = $state('')
+  let hint = $state('')
+  let hintTimer: number | undefined
   let requestId = ''
   let list: HTMLDivElement
 
@@ -38,12 +41,45 @@
     return md.render(text)
   }
 
+  function showHint(text: string) {
+    hint = text
+    clearTimeout(hintTimer)
+    hintTimer = window.setTimeout(() => (hint = ''), 2000)
+  }
+
   function handleClick(event: MouseEvent) {
-    const anchor = (event.target as HTMLElement).closest('.messages a')
-    if (!anchor) return
-    event.preventDefault()
-    const href = anchor.getAttribute('href')
-    if (href) openUrl(href).catch(() => {})
+    const target = event.target as HTMLElement
+
+    const anchor = target.closest('.messages a')
+    if (anchor) {
+      event.preventDefault()
+      const href = anchor.getAttribute('href')
+      if (href) openUrl(href).catch(() => {})
+      return
+    }
+
+    const code = target.closest('.messages pre code')
+    if (!code) return
+    if (window.getSelection()?.toString().trim()) return
+
+    const text = (code.textContent ?? '').trim().replace(/^\$\s+/, '')
+    if (!text) return
+
+    if (event.ctrlKey || event.metaKey) {
+      if (text.includes('\n')) {
+        navigator.clipboard.writeText(text).catch(() => {})
+        showHint('Commande multi-ligne : copiée, pas insérée.')
+        return
+      }
+      insertIntoTerminal(text)
+      showHint('Commande insérée dans le terminal.')
+      return
+    }
+
+    navigator.clipboard
+      .writeText(text)
+      .then(() => showHint('Commande copiée.'))
+      .catch(() => showHint('Presse-papiers indisponible.'))
   }
 
   async function loadProviders() {
@@ -156,6 +192,10 @@
       <p class="muted">Pose une question sur tes commandes.</p>
     {/each}
   </div>
+
+  {#if hint}
+    <p class="hint">{hint}</p>
+  {/if}
 
   {#if error}
     <p class="error">{error}</p>
@@ -309,11 +349,26 @@
   }
 
   .text :global(pre) {
+    position: relative;
     margin: 0 0 8px;
     padding: 8px;
     background: var(--void);
     border: 1px solid var(--line);
     overflow-x: auto;
+    cursor: copy;
+  }
+
+  .text :global(pre:hover)::after {
+    content: 'clic pour copier, ctrl+clic vers le terminal';
+    position: absolute;
+    top: 3px;
+    right: 6px;
+    padding: 0 4px;
+    background: var(--void);
+    color: var(--ink-faint);
+    font-family: var(--mono);
+    font-size: 10px;
+    pointer-events: none;
   }
 
   .text :global(pre code) {
@@ -402,6 +457,12 @@
   .muted {
     color: var(--ink-dim);
     font-size: 12px;
+  }
+
+  .hint {
+    margin: 0 12px 8px;
+    color: var(--ink-dim);
+    font-size: 11px;
   }
 
   .error {

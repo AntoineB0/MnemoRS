@@ -5,6 +5,7 @@
   import { FitAddon } from '@xterm/addon-fit'
   import '@xterm/xterm/css/xterm.css'
   import { theme, terminalTheme } from './theme.svelte'
+  import { registerTerminalInsert } from './terminal-bridge'
 
   type PtyEvent =
     | { type: 'data'; chunk: string }
@@ -34,6 +35,12 @@
 
     let sessionId = ''
     let ready = false
+
+    const unregister = registerTerminalInsert((text) => {
+      if (!ready) return
+      invoke('pty_write', { sessionId, data: text }).catch(() => {})
+      terminal.focus()
+    })
 
     const refit = () => {
       fit.fit()
@@ -102,6 +109,7 @@
     terminal.focus()
 
     return () => {
+      unregister()
       observer.disconnect()
       host.removeEventListener('click', focus)
       dataListener.dispose()
