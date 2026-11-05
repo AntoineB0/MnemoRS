@@ -97,6 +97,20 @@ L'indexation parcourt les outils présents dans l'historique (`man`, puis `--hel
 et les fichiers Markdown du dossier courant, en ignorant `node_modules`, `target`,
 `.git` et `dist`.
 
+### Corrections
+
+Quand une commande échoue puis qu'une commande réussit dans le même dossier,
+le couple « échec → correction » reçoit un score de confiance :
+
+- au-dessus du seuil automatique, il est injecté directement dans le contexte ;
+- entre les deux seuils, il attend une validation dans **Réglages → Corrections** ;
+- en dessous, il est ignoré.
+
+La fenêtre de temps et les seuils sont réglables. L'historique existant est
+analysé une seule fois au premier lancement, en ne conservant que les
+certitudes. Une correction erronée peut être retirée depuis le détail de la
+commande dans l'historique.
+
 ## Données
 
 - Base SQLite : `~/.local/share/com.icetech.mnemors/mnemors.db`
