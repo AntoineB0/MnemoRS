@@ -3,6 +3,7 @@ mod docs;
 mod harness;
 mod ipc;
 mod ipc_chat;
+mod ipc_docs;
 mod providers;
 mod pty;
 mod shell;
@@ -40,6 +41,11 @@ pub fn run() {
             ipc_chat::providers_test,
             ipc_chat::chat_send,
             ipc_chat::chat_cancel,
+            ipc_docs::docs_settings,
+            ipc_docs::docs_set_settings,
+            ipc_docs::docs_stats,
+            ipc_docs::docs_clear,
+            ipc_docs::docs_ingest,
         ])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;

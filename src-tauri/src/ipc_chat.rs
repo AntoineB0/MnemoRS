@@ -8,7 +8,8 @@ use serde_json::json;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::harness::{self, CommandContext, ContextInput};
+use crate::docs::{self, Embedder};
+use crate::harness::{self, CommandContext, ContextInput, DocPassage};
 use crate::providers::{self, ChatEvent, ChatMessage, ProviderConfig};
 use crate::storage::CommandDetail;
 use crate::AppState;
@@ -102,6 +103,14 @@ pub async fn chat_send(
         .ok_or("provider inconnu")?;
     let key = providers::get_key(&provider_id).map_err(|e| format!("{e:#}"))?;
 
+    let question = messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| message.content.clone())
+        .unwrap_or_default();
+    let doc_passages = retrieve_docs(&state, &question).await;
+
     let recent = state.db.recent(12, false).map_err(|e| format!("{e:#}"))?;
     let failures = state.db.recent(5, true).map_err(|e| format!("{e:#}"))?;
     let cwd = state.cwd.lock().ok().and_then(|slot| slot.clone());
@@ -115,6 +124,7 @@ pub async fn chat_send(
         shell: if shell.is_empty() { "inconnu" } else { &shell },
         recent: recent.into_iter().map(to_context).collect(),
         failures: failures.into_iter().map(to_context).collect(),
+        docs: doc_passages,
     });
 
     let mut messages = messages;
@@ -161,6 +171,44 @@ pub fn chat_cancel(state: State<'_, AppState>, request_id: String) -> Result<(),
         cancel.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// Recherche documentaire ; toute panne est journalisée et n'empêche pas
+/// la conversation de continuer sans documentation.
+async fn retrieve_docs(state: &AppState, question: &str) -> Vec<DocPassage> {
+    if question.trim().is_empty() {
+        return Vec::new();
+    }
+    if state.db.docs_stats().map(|stats| stats.chunks).unwrap_or(0) == 0 {
+        return Vec::new();
+    }
+
+    let settings = crate::ipc_docs::read_settings(&state.db);
+    let embedder = Embedder::new(&settings.base_url, &settings.model);
+    let vector = match embedder.embed(&[question.to_string()]).await {
+        Ok(mut vectors) if !vectors.is_empty() => vectors.remove(0),
+        Ok(_) => return Vec::new(),
+        Err(error) => {
+            log::warn!("embeddings indisponibles : {error:#}");
+            return Vec::new();
+        }
+    };
+
+    let key = docs::model_key(&settings.model, vector.len());
+    match docs::search::search(&state.db, question, &vector, &key, 5) {
+        Ok(chunks) => chunks
+            .into_iter()
+            .map(|chunk| DocPassage {
+                source: chunk.source,
+                section: chunk.section,
+                content: chunk.content,
+            })
+            .collect(),
+        Err(error) => {
+            log::warn!("recherche documentaire : {error:#}");
+            Vec::new()
+        }
+    }
 }
 
 fn to_context(detail: CommandDetail) -> CommandContext {
@@ -289,6 +337,7 @@ mod tests {
             shell: "zsh",
             recent: recent.into_iter().map(to_context).collect(),
             failures: failures.into_iter().map(to_context).collect(),
+            docs: Vec::new(),
         })
     }
 

@@ -9,11 +9,20 @@ pub struct CommandContext {
     pub output: String,
 }
 
+/// Extrait de documentation retrouvé par la recherche hybride.
+#[derive(Debug, Clone)]
+pub struct DocPassage {
+    pub source: String,
+    pub section: Option<String>,
+    pub content: String,
+}
+
 pub struct ContextInput<'a> {
     pub cwd: Option<&'a str>,
     pub shell: &'a str,
     pub recent: Vec<CommandContext>,
     pub failures: Vec<CommandContext>,
+    pub docs: Vec<DocPassage>,
 }
 
 /// Budget approximatif en caractères (aucun tokenizer : ~4 caractères/token).
@@ -42,31 +51,46 @@ pub fn build(input: &ContextInput) -> String {
     ));
     out.push_str(&format!("\n- Shell : {}", input.shell));
 
+    let mut used = out.len();
+
     if input.recent.is_empty() {
         out.push_str("\n\nAucune commande enregistrée dans cette session.");
-        return out;
-    }
+    } else {
+        out.push_str("\n\n## Commandes récentes");
+        out.push_str("\nDe la plus ancienne à la plus récente.\n");
 
-    out.push_str("\n\n## Commandes récentes");
-    out.push_str("\nDe la plus ancienne à la plus récente.\n");
-
-    let mut used = out.len();
-    let mut selected: Vec<&CommandContext> = Vec::new();
-    for command in input.recent.iter().rev() {
-        let cost = estimate(command, OUTPUT_CHARS);
-        if used + cost > BUDGET_CHARS {
-            continue;
+        let mut selected: Vec<&CommandContext> = Vec::new();
+        for command in input.recent.iter().rev() {
+            let cost = estimate(command, OUTPUT_CHARS);
+            if used + cost > BUDGET_CHARS {
+                continue;
+            }
+            used += cost;
+            selected.push(command);
         }
-        used += cost;
-        selected.push(command);
-    }
-    selected.reverse();
+        selected.reverse();
 
-    if selected.is_empty() {
-        out.push_str("\n(historique trop volumineux pour le budget)\n");
+        if selected.is_empty() {
+            out.push_str("\n(historique trop volumineux pour le budget)\n");
+        }
+        for command in selected {
+            out.push_str(&format_command(command, OUTPUT_CHARS));
+        }
     }
-    for command in selected {
-        out.push_str(&format_command(command, OUTPUT_CHARS));
+
+    if !input.docs.is_empty() {
+        out.push_str("\n## Documentation\n");
+        out.push_str("Extraits de manuels et READMEs retrouvés pour la question. Cite la source quand tu t'en sers.\n");
+        for doc in &input.docs {
+            let cost = doc.content.len() + 120;
+            if used + cost > BUDGET_CHARS {
+                break;
+            }
+            used += cost;
+            out.push_str(&format!("\n[{}]\n", doc_label(doc)));
+            out.push_str(&doc.content);
+            out.push('\n');
+        }
     }
 
     if !input.failures.is_empty() {
@@ -83,6 +107,13 @@ pub fn build(input: &ContextInput) -> String {
     }
 
     out
+}
+
+fn doc_label(doc: &DocPassage) -> String {
+    match &doc.section {
+        Some(section) => format!("{} § {}", doc.source, section),
+        None => doc.source.clone(),
+    }
 }
 
 fn estimate(command: &CommandContext, output_chars: usize) -> usize {
@@ -147,6 +178,7 @@ mod tests {
             shell: "zsh",
             recent,
             failures,
+            docs: Vec::new(),
         }
     }
 
@@ -212,6 +244,36 @@ mod tests {
         assert!(prompt.contains("Échecs récents"));
         assert!(prompt.contains("$ false"));
         assert!(prompt.contains("code 1"));
+    }
+
+    #[test]
+    fn documentation_injectee_avec_sa_source() {
+        let mut context = input(vec![], vec![]);
+        context.docs = vec![DocPassage {
+            source: "doc:tar".into(),
+            section: Some("OPTIONS".into()),
+            content: "utiliser -x pour extraire".into(),
+        }];
+        let prompt = build(&context);
+        assert!(prompt.contains("## Documentation"));
+        assert!(prompt.contains("doc:tar § OPTIONS"));
+        assert!(prompt.contains("utiliser -x pour extraire"));
+    }
+
+    #[test]
+    fn documentation_respecte_le_budget() {
+        let mut context = input(vec![], vec![]);
+        context.docs = (0..50)
+            .map(|index| DocPassage {
+                source: format!("doc:{index}"),
+                section: None,
+                content: "z".repeat(2000),
+            })
+            .collect();
+        let prompt = build(&context);
+        assert!(prompt.len() <= BUDGET_CHARS + 2000);
+        assert!(prompt.contains("doc:0"));
+        assert!(!prompt.contains("doc:49"));
     }
 
     #[test]

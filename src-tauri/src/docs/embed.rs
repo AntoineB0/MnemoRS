@@ -14,10 +14,6 @@ impl Embedder {
         }
     }
 
-    pub fn model(&self) -> &str {
-        &self.model
-    }
-
     /// Envoie un lot de textes et renvoie les vecteurs dans l'ordre d'entrée.
     pub async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
