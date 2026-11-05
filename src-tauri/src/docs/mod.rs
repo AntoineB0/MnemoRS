@@ -14,6 +14,7 @@ pub use sync::{sync, SyncReport};
 mod integration {
     use super::*;
     use crate::storage::Db;
+    use std::sync::atomic::AtomicBool;
 
     #[tokio::test]
     #[ignore = "nécessite Ollama, bge-m3 et la page man de tar"]
@@ -23,7 +24,7 @@ mod integration {
         assert!(!sources.is_empty(), "aucune source collectée");
 
         let embedder = Embedder::new("http://localhost:11434/v1", "bge-m3");
-        let report = sync(&db, &embedder, "bge-m3", &sources, None, |_, _, _| {})
+        let report = sync(&db, &embedder, "bge-m3", &sources, None, &AtomicBool::new(false), |_, _, _| {})
             .await
             .expect("synchronisation");
 
@@ -56,12 +57,12 @@ mod integration {
         let sources = tools(&["tar".to_string()]);
         let embedder = Embedder::new("http://localhost:11434/v1", "bge-m3");
 
-        let first = sync(&db, &embedder, "bge-m3", &sources, None, |_, _, _| {})
+        let first = sync(&db, &embedder, "bge-m3", &sources, None, &AtomicBool::new(false), |_, _, _| {})
             .await
             .expect("première passe");
         assert!(first.indexed > 0);
 
-        let second = sync(&db, &embedder, "bge-m3", &sources, None, |_, _, _| {})
+        let second = sync(&db, &embedder, "bge-m3", &sources, None, &AtomicBool::new(false), |_, _, _| {})
             .await
             .expect("seconde passe");
         assert_eq!(second.indexed, 0, "rien ne doit être réindexé");

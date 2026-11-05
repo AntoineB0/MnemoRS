@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 
@@ -17,12 +18,14 @@ pub struct SyncReport {
     pub deleted: usize,
     pub chunks: usize,
     pub failed: usize,
+    pub cancelled: bool,
 }
 
 enum Outcome {
     Skipped,
     Restored,
     Indexed(usize),
+    Cancelled,
 }
 
 /// Met l'index à jour : seules les sources dont l'empreinte de contenu a
@@ -34,6 +37,7 @@ pub async fn sync<F>(
     model: &str,
     sources: &[SourceDoc],
     scope: Option<&Path>,
+    cancel: &AtomicBool,
     progress: F,
 ) -> Result<SyncReport>
 where
@@ -43,12 +47,21 @@ where
     let total = sources.len();
 
     for (index, source) in sources.iter().enumerate() {
-        match sync_one(db, embedder, model, source).await {
+        if cancel.load(Ordering::Relaxed) {
+            report.cancelled = true;
+            break;
+        }
+
+        match sync_one(db, embedder, model, source, cancel).await {
             Ok(Outcome::Skipped) => report.skipped += 1,
             Ok(Outcome::Restored) => report.restored += 1,
             Ok(Outcome::Indexed(chunks)) => {
                 report.indexed += 1;
                 report.chunks += chunks;
+            }
+            Ok(Outcome::Cancelled) => {
+                report.cancelled = true;
+                break;
             }
             Err(error) => {
                 log::warn!("indexation de {} : {error:#}", source.source);
@@ -82,6 +95,7 @@ async fn sync_one(
     embedder: &Embedder,
     model: &str,
     source: &SourceDoc,
+    cancel: &AtomicBool,
 ) -> Result<Outcome> {
     let hash = blake3::hash(source.text.as_bytes()).to_hex().to_string();
 
@@ -99,6 +113,9 @@ async fn sync_one(
     let mut new_chunks = Vec::with_capacity(pieces.len());
 
     for batch in pieces.chunks(EMBED_BATCH) {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(Outcome::Cancelled);
+        }
         let texts: Vec<String> = batch
             .iter()
             .map(|piece| match &piece.section {
@@ -159,11 +176,28 @@ mod tests {
         let embedder = Embedder::new("http://127.0.0.1:1/v1", "test");
         let sources = vec![source("un"), source("deux")];
 
-        let report = sync(&db, &embedder, "test", &sources, None, |_, _, _| {})
+        let report = sync(&db, &embedder, "test", &sources, None, &AtomicBool::new(false), |_, _, _| {})
             .await
             .expect("la synchronisation doit continuer malgré les échecs");
 
         assert_eq!(report.failed, 2);
         assert_eq!(report.indexed, 0);
+    }
+
+    #[tokio::test]
+    async fn annulation_avant_le_premier_document() {
+        let db = Db::open_in_memory().unwrap();
+        let embedder = Embedder::new("http://127.0.0.1:1/v1", "test");
+        let sources = vec![source("un"), source("deux")];
+        let cancel = AtomicBool::new(true);
+
+        let report = sync(&db, &embedder, "test", &sources, None, &cancel, |_, _, _| {})
+            .await
+            .expect("l'annulation n'est pas une erreur");
+
+        assert!(report.cancelled);
+        assert_eq!(report.indexed, 0);
+        // Aucun appel d'embedding : le service injoignable n'a pas été sollicité.
+        assert_eq!(report.failed, 0);
     }
 }

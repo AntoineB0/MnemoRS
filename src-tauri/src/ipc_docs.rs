@@ -79,6 +79,8 @@ pub async fn docs_ingest(
 
     let sources = collect_sources(&db, &cwd, include_tools).await?;
     let embedder = Embedder::new(&settings.base_url, &settings.model);
+    let cancel = Arc::clone(&state.ingest_cancel);
+    cancel.store(false, Ordering::Relaxed);
 
     let report = docs::sync(
         &db,
@@ -86,6 +88,7 @@ pub async fn docs_ingest(
         &settings.model,
         &sources,
         Some(Path::new(&cwd)),
+        &cancel,
         |done, total, message| {
             let _ = on_event.send(IngestEvent::Progress {
                 done,
@@ -97,13 +100,19 @@ pub async fn docs_ingest(
     .await
     .map_err(|error| format!("{error:#}"))?;
 
-    if include_tools {
+    if include_tools && !report.cancelled {
         store_system_fingerprint(&db);
     }
 
     let _ = on_event.send(IngestEvent::Done {
         report: report.clone(),
     });
+    Ok(())
+}
+
+#[tauri::command]
+pub fn docs_cancel(state: State<'_, AppState>) -> Result<(), String> {
+    state.ingest_cancel.store(true, Ordering::Relaxed);
     Ok(())
 }
 
@@ -120,6 +129,7 @@ pub async fn auto_sync(app: AppHandle, db: Arc<Db>, cwd: String) -> anyhow::Resu
         .await
         .map_err(anyhow::Error::msg)?;
     let embedder = Embedder::new(&settings.base_url, &settings.model);
+    let cancel = std::sync::atomic::AtomicBool::new(false);
 
     let report = docs::sync(
         &db,
@@ -127,6 +137,7 @@ pub async fn auto_sync(app: AppHandle, db: Arc<Db>, cwd: String) -> anyhow::Resu
         &settings.model,
         &sources,
         Some(Path::new(&cwd)),
+        &cancel,
         |_, _, _| {},
     )
     .await?;

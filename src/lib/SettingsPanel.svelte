@@ -22,6 +22,7 @@
     deleted: number
     chunks: number
     failed: number
+    cancelled: boolean
   }
   type FixSettings = { windowMinutes: number; autoThreshold: number; suggestThreshold: number }
   type FixRow = {
@@ -173,12 +174,13 @@
         } else {
           progress = ''
           const report = event.report
-          message =
-            `${report.indexed} source(s) indexée(s), ${report.skipped} inchangée(s)` +
-            (report.restored ? `, ${report.restored} restaurée(s)` : '') +
-            (report.deleted ? `, ${report.deleted} supprimée(s)` : '') +
-            (report.failed ? `, ${report.failed} en échec` : '') +
-            ` — ${report.chunks} chunks.`
+          message = report.cancelled
+            ? `Indexation annulée — ${report.indexed} source(s) indexée(s) avant l'arrêt.`
+            : `${report.indexed} source(s) indexée(s), ${report.skipped} inchangée(s)` +
+              (report.restored ? `, ${report.restored} restaurée(s)` : '') +
+              (report.deleted ? `, ${report.deleted} supprimée(s)` : '') +
+              (report.failed ? `, ${report.failed} en échec` : '') +
+              ` — ${report.chunks} chunks.`
         }
       }
       await invoke('docs_ingest', { onEvent: channel })
@@ -187,6 +189,14 @@
       error = String(e)
     } finally {
       ingesting = false
+    }
+  }
+
+  async function cancelIngest() {
+    try {
+      await invoke('docs_cancel')
+    } catch (e) {
+      error = String(e)
     }
   }
 
@@ -360,6 +370,9 @@
         {ingesting ? 'indexation…' : 'indexer'}
       </button>
       <button onclick={saveDocs} disabled={ingesting}>enregistrer</button>
+      {#if ingesting}
+        <button onclick={cancelIngest}>annuler</button>
+      {/if}
       <button class="danger" onclick={clearDocs} disabled={ingesting}>vider</button>
     </div>
 
