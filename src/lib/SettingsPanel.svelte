@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { invoke } from '@tauri-apps/api/core'
+  import { Channel, invoke } from '@tauri-apps/api/core'
 
   type ProviderView = {
     id: string
@@ -9,6 +9,17 @@
     model: string
     hasKey: boolean
   }
+
+  type DocsSettings = { baseUrl: string; model: string }
+  type DocsStats = { chunks: number; sources: string[]; models: string[] }
+  type IngestEvent =
+    | { type: 'progress'; done: number; total: number; message: string }
+    | { type: 'done'; chunks: number; sources: number }
+
+  let docs = $state<DocsSettings>({ baseUrl: '', model: '' })
+  let stats = $state<DocsStats>({ chunks: 0, sources: [], models: [] })
+  let ingesting = $state(false)
+  let progress = $state('')
 
   let providers = $state<ProviderView[]>([])
   let editing = $state<ProviderView | null>(null)
@@ -25,7 +36,63 @@
     }
   }
 
-  onMount(load)
+  async function loadDocs() {
+    try {
+      docs = await invoke<DocsSettings>('docs_settings')
+      stats = await invoke<DocsStats>('docs_stats')
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  onMount(() => {
+    void load()
+    void loadDocs()
+  })
+
+  async function saveDocs() {
+    try {
+      await invoke('docs_set_settings', { baseUrl: docs.baseUrl, model: docs.model })
+      message = "Réglages d'indexation enregistrés."
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  async function ingest() {
+    ingesting = true
+    error = ''
+    message = ''
+    progress = ''
+    try {
+      await invoke('docs_set_settings', { baseUrl: docs.baseUrl, model: docs.model })
+      const channel = new Channel<IngestEvent>()
+      channel.onmessage = (event) => {
+        if (event.type === 'progress') {
+          progress = `${event.done}/${event.total} — ${event.message}`
+        } else {
+          progress = ''
+          message = `${event.chunks} chunks indexés depuis ${event.sources} sources.`
+        }
+      }
+      await invoke('docs_ingest', { onEvent: channel })
+      await loadDocs()
+    } catch (e) {
+      error = String(e)
+    } finally {
+      ingesting = false
+    }
+  }
+
+  async function clearDocs() {
+    try {
+      await invoke('docs_clear')
+      await loadDocs()
+      message = 'Index de documentation vidé.'
+    } catch (e) {
+      error = String(e)
+    }
+  }
 
   function edit(provider?: ProviderView) {
     editing = provider
@@ -136,6 +203,41 @@
   {:else}
     <button class="add" onclick={() => edit()}>ajouter un provider</button>
   {/if}
+
+  <section class="docs">
+    <h3>Documentation indexée</h3>
+    <p class="muted">
+      {stats.chunks} chunks · {stats.sources.length} sources
+      {#if stats.models.length}· modèle {stats.models.join(', ')}{/if}
+    </p>
+
+    <label>
+      URL des embeddings
+      <input bind:value={docs.baseUrl} placeholder="http://localhost:11434/v1" />
+    </label>
+    <label>
+      modèle d'embeddings
+      <input bind:value={docs.model} placeholder="bge-m3" />
+    </label>
+
+    <div class="actions">
+      <button onclick={ingest} disabled={ingesting}>
+        {ingesting ? 'indexation…' : 'indexer'}
+      </button>
+      <button onclick={saveDocs} disabled={ingesting}>enregistrer</button>
+      <button class="danger" onclick={clearDocs} disabled={ingesting}>vider</button>
+    </div>
+
+    {#if progress}<p class="muted">{progress}</p>{/if}
+
+    {#if stats.sources.length}
+      <ul class="sources">
+        {#each stats.sources.slice(0, 30) as source (source)}
+          <li title={source}>{source}</li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
 
   {#if message}<p class="ok">{message}</p>{/if}
   {#if error}<p class="error">{error}</p>{/if}
@@ -259,6 +361,44 @@
 
   .error {
     color: #f48771;
+  }
+
+  .docs {
+    margin-top: 16px;
+    border-top: 1px solid #2a2b38;
+    padding-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .docs h3 {
+    margin: 0;
+    font: 600 11px/1 system-ui, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #9b9bab;
+  }
+
+  .docs .actions {
+    flex-wrap: wrap;
+  }
+
+  .sources {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 140px;
+    overflow-y: auto;
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: #82839a;
+  }
+
+  .sources li {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .hint {
