@@ -13,6 +13,7 @@
 
   --mono: 'JetBrainsMono Nerd Font Mono', 'JetBrains Mono', ui-monospace, monospace;
   --sans: 'Adwaita Sans', Cantarell, system-ui, sans-serif;
+  --topbar: 38px;
 
   font-family: var(--sans);
   font-size: 14px;

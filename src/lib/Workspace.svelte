@@ -147,7 +147,7 @@
   .tabs {
     display: flex;
     align-items: stretch;
-    min-height: 30px;
+    height: var(--topbar);
     background: var(--surface);
     border-bottom: 1px solid var(--line);
     font-family: var(--mono);
@@ -168,6 +168,8 @@
   }
 
   .tab .label {
+    display: flex;
+    align-items: center;
     padding: 0 8px;
     background: none;
     border: 0;
@@ -177,6 +179,8 @@
   }
 
   .tab .close {
+    display: flex;
+    align-items: center;
     padding: 0 6px;
     background: none;
     border: 0;
@@ -195,6 +199,9 @@
   }
 
   .icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 30px;
     background: none;
     border: 0;

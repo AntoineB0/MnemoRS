@@ -50,13 +50,17 @@
 
   nav {
     display: flex;
+    height: var(--topbar);
     border-bottom: 1px solid var(--line);
   }
 
   nav button {
     flex: 1;
     position: relative;
-    padding: 11px 8px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
     background: none;
     border: 0;
     color: var(--ink-dim);
