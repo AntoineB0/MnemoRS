@@ -635,19 +635,19 @@ fn migrate(conn: &Connection) -> Result<()> {
 
 /// Transforme une saisie libre en requête FTS5 sûre : chaque mot devient un
 /// préfixe, la ponctuation de l'utilisateur ne peut pas casser la syntaxe.
+/// Les tokens sont recoupés sur la ponctuation pour que `archive.tgz` retrouve
+/// bien `archive` et `tgz`, tels que FTS5 les indexe.
 fn fts_query(input: &str) -> String {
-    input
-        .split_whitespace()
-        .map(|token| {
-            token
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_')
-                .collect::<String>()
-        })
-        .filter(|token| !token.is_empty())
+    fts_tokens(input)
         .map(|token| format!("{token}*"))
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn fts_tokens(input: &str) -> impl Iterator<Item = &str> {
+    input
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|token| token.chars().count() >= 2)
 }
 
 fn map_fix(row: &rusqlite::Row<'_>) -> rusqlite::Result<fixes::FixRow> {
@@ -666,15 +666,7 @@ fn map_fix(row: &rusqlite::Row<'_>) -> rusqlite::Result<fixes::FixRow> {
 
 /// Requête FTS en OR : on veut les commandes proches, pas identiques.
 fn fts_or_query(input: &str) -> String {
-    input
-        .split_whitespace()
-        .map(|token| {
-            token
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_')
-                .collect::<String>()
-        })
-        .filter(|token| !token.is_empty())
+    fts_tokens(input)
         .map(|token| format!("{token}*"))
         .collect::<Vec<_>>()
         .join(" OR ")
@@ -743,6 +735,21 @@ mod tests {
 
         let by_output = db.search("extraction", 10, false).unwrap();
         assert_eq!(by_output.len(), 1);
+    }
+
+    #[test]
+    fn recherche_par_nom_de_fichier_ponctue() {
+        let db = db();
+        db.insert_command(
+            "pty-1",
+            &record("tar -xJf Ressources-20261006.zip", "", 2),
+            10,
+        )
+        .unwrap();
+
+        assert_eq!(db.search("Ressources-20261006.zip", 10, false).unwrap().len(), 1);
+        assert_eq!(db.search("archive.tgz", 10, false).unwrap().len(), 0);
+        assert_eq!(db.search("20261006", 10, false).unwrap().len(), 1);
     }
 
     #[test]
