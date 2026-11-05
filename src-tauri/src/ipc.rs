@@ -259,9 +259,6 @@ pub fn pty_spawn(
             cwds.insert(session_id.clone(), cwd);
         }
     }
-    if let Ok(mut active) = state.active_session.lock() {
-        *active = Some(session_id.clone());
-    }
     Ok(session_id)
 }
 
