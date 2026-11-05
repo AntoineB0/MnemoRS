@@ -448,9 +448,17 @@ impl Db {
         ts: i64,
     ) -> Result<()> {
         self.conn()?.execute(
-            "INSERT OR IGNORE INTO fixes
+            "INSERT INTO fixes
                (failed_cmd_id, fix_cmd_id, confidence, status, origin, created_ts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(failed_cmd_id, fix_cmd_id) DO UPDATE SET
+               confidence = excluded.confidence,
+               status = CASE
+                 WHEN fixes.status = 'suggested' AND excluded.status = 'auto' THEN 'auto'
+                 ELSE fixes.status
+               END
+             WHERE excluded.confidence > fixes.confidence
+               AND fixes.status IN ('suggested', 'auto')",
             params![failed_cmd_id, fix_cmd_id, confidence, status, origin, ts],
         )?;
         Ok(())
@@ -972,6 +980,32 @@ mod tests {
 
         assert_eq!(db.pending_fixes(10).unwrap().len(), 1);
         assert!(db.similar_fixes("python app.py", 999, 5).unwrap().is_empty());
+    }
+
+    #[test]
+    fn une_meilleure_correction_promeut_la_suggestion() {
+        let db = db();
+        let failed = db
+            .insert_command("pty-1", &record("python app.py", "", 1), 10)
+            .unwrap();
+        let fixed = db
+            .insert_command("pty-1", &record("pip install requests", "", 0), 20)
+            .unwrap();
+
+        db.insert_fix(failed, fixed, 0.7, "suggested", "live", 20)
+            .unwrap();
+        db.insert_fix(failed, fixed, 0.9, "auto", "live", 20)
+            .unwrap();
+
+        let fix = db.fix_for_command(failed).unwrap().unwrap();
+        assert_eq!(fix.status, "auto");
+        assert!((fix.confidence - 0.9).abs() < 1e-6);
+
+        // Un statut choisi par l'utilisateur n'est jamais écrasé.
+        db.set_fix_status(fix.id, "confirmed").unwrap();
+        db.insert_fix(failed, fixed, 0.99, "auto", "live", 30)
+            .unwrap();
+        assert_eq!(db.fix_for_command(failed).unwrap().unwrap().status, "confirmed");
     }
 
     #[test]
