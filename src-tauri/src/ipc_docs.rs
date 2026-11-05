@@ -191,11 +191,22 @@ pub fn current_cwd(state: &AppState) -> String {
         })
 }
 
+/// Vrai si l'URL pointe vers la machine locale. La comparaison porte sur l'hôte
+/// exact : `localhost.exemple.com` n'est pas local.
 fn is_local(url: &str) -> bool {
-    let lower = url.to_lowercase();
-    lower.starts_with("http://localhost")
-        || lower.starts_with("http://127.0.0.1")
-        || lower.starts_with("http://[::1]")
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"));
+    let Some(rest) = rest else { return false };
+
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next().unwrap_or(""),
+        None => host.split(':').next().unwrap_or(""),
+    };
+
+    matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1")
 }
 
 pub fn read_settings(db: &Db) -> DocsSettings {
@@ -226,5 +237,36 @@ struct RunningGuard(Arc<std::sync::atomic::AtomicBool>);
 impl Drop for RunningGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_local;
+
+    #[test]
+    fn hotes_locaux_reconnus() {
+        for url in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:11434",
+            "http://[::1]:11434/v1",
+            "https://localhost",
+        ] {
+            assert!(is_local(url), "{url} devrait être local");
+        }
+    }
+
+    #[test]
+    fn hotes_distants_refuses() {
+        for url in [
+            "http://localhost.exemple.com/v1",
+            "http://127.0.0.1.exemple.com",
+            "http://192.168.1.10:11434",
+            "http://exemple.com/localhost",
+            "ftp://localhost",
+            "localhost:11434",
+        ] {
+            assert!(!is_local(url), "{url} ne devrait pas être local");
+        }
     }
 }
