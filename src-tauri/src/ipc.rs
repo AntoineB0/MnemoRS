@@ -235,6 +235,14 @@ pub fn history_get(
 }
 
 #[tauri::command]
+pub fn history_clear(state: State<'_, AppState>) -> Result<usize, String> {
+    state
+        .db
+        .clear_history()
+        .map_err(|error| format!("{error:#}"))
+}
+
+#[tauri::command]
 pub fn pty_write(
     state: State<'_, AppState>,
     session_id: String,

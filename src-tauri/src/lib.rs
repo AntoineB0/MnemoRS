@@ -40,6 +40,7 @@ pub fn run() {
             ipc::pty_kill,
             ipc::history_search,
             ipc::history_get,
+            ipc::history_clear,
             ipc_chat::providers_list,
             ipc_chat::providers_save,
             ipc_chat::providers_delete,

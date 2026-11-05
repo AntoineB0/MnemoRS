@@ -30,6 +30,8 @@
   let fix = $state<FixRow | null>(null)
   let loading = $state(false)
   let error = $state('')
+  let confirmingClear = $state(false)
+  let confirmTimer: number | undefined
 
   async function load(search = query, failed = onlyFailed) {
     try {
@@ -89,6 +91,29 @@
     }
   }
 
+  function clearHistory() {
+    if (!confirmingClear) {
+      confirmingClear = true
+      clearTimeout(confirmTimer)
+      confirmTimer = window.setTimeout(() => (confirmingClear = false), 4000)
+      return
+    }
+    clearTimeout(confirmTimer)
+    confirmingClear = false
+    void doClear()
+  }
+
+  async function doClear() {
+    try {
+      await invoke('history_clear')
+      selected = null
+      fix = null
+      await load()
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
   function time(ts: number) {
     return new Date(ts).toLocaleTimeString('fr-FR', {
       hour: '2-digit',
@@ -124,6 +149,9 @@
       <input type="checkbox" bind:checked={onlyFailed} />
       échecs
     </label>
+    <button class="copy" onclick={clearHistory} disabled={rows.length === 0}>
+      {confirmingClear ? 'confirmer ?' : 'vider'}
+    </button>
   </div>
 
   {#if error}
@@ -353,6 +381,11 @@
   .copy:hover {
     color: var(--ink);
     border-color: var(--signal);
+  }
+
+  .copy:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   .error {

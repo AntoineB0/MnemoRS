@@ -464,6 +464,12 @@ impl Db {
         Ok(())
     }
 
+    /// Supprime tout l'historique. Les corrections liées partent en cascade.
+    pub fn clear_history(&self) -> Result<usize> {
+        let deleted = self.conn()?.execute("DELETE FROM commands", [])?;
+        Ok(deleted)
+    }
+
     pub fn fix_for_command(&self, cmd_id: i64) -> Result<Option<fixes::FixRow>> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -1006,6 +1012,24 @@ mod tests {
         db.insert_fix(failed, fixed, 0.99, "auto", "live", 30)
             .unwrap();
         assert_eq!(db.fix_for_command(failed).unwrap().unwrap().status, "confirmed");
+    }
+
+    #[test]
+    fn vider_l_historique_supprime_commandes_et_corrections() {
+        let db = db();
+        let failed = db
+            .insert_command("pty-1", &record("tar -xzf a.tgz", "", 2), 10)
+            .unwrap();
+        let fixed = db
+            .insert_command("pty-1", &record("tar -xJf a.tar.xz", "", 0), 20)
+            .unwrap();
+        db.insert_fix(failed, fixed, 0.99, "auto", "live", 20)
+            .unwrap();
+
+        assert_eq!(db.clear_history().unwrap(), 2);
+        assert!(db.recent(10, false).unwrap().is_empty());
+        assert!(db.search("tar", 10, false).unwrap().is_empty());
+        assert!(db.fix_for_command(failed).unwrap().is_none());
     }
 
     #[test]
