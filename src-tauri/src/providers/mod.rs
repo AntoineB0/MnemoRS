@@ -57,6 +57,6 @@ pub fn default_provider() -> ProviderConfig {
         id: "ollama".into(),
         name: "Ollama (local)".into(),
         base_url: "http://localhost:11434/v1".into(),
-        model: "qwen2.5-coder:7b".into(),
+        model: "qwen3.5:9b".into(),
     }
 }

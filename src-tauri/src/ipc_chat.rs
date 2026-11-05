@@ -73,6 +73,7 @@ pub async fn providers_test(
         "model": provider.model,
         "messages": [{ "role": "user", "content": "ping" }],
         "max_tokens": 1,
+        "temperature": 0.2,
         "stream": false,
     }))
     .await
@@ -188,6 +189,7 @@ where
         json!({
             "model": provider.model,
             "messages": messages,
+            "temperature": 0.2,
             "stream": true,
         }),
     )

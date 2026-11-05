@@ -28,8 +28,8 @@ Le contexte ci-dessous provient de son historique réel : commandes, dossier, \
 code de retour et sortie. Appuie-toi dessus et cite les éléments précis \
 (commande, code de retour, message d'erreur). N'invente jamais un code de \
 retour, une commande ou une sortie absents du contexte ; si l'information \
-manque, dis-le. Réponds en français, de façon concise, et propose des \
-commandes en bloc de code quand c'est utile.";
+manque, dis-le. Réponds uniquement en français, sans mélanger d'anglais, de façon \
+concise, et propose des commandes en bloc de code quand c'est utile.";
 
 /// Assemble le prompt système : en-tête, commandes récentes puis échecs,
 /// en supprimant les éléments les plus anciens quand le budget est dépassé.
