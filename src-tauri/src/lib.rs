@@ -1,5 +1,7 @@
+mod capture;
 mod ipc;
 mod pty;
+mod shell;
 
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -1854,6 +1854,7 @@ dependencies = [
  "anyhow",
  "log",
  "portable-pty",
+ "regex",
  "serde",
  "serde_json",
  "tauri",
