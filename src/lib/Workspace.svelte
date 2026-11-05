@@ -127,7 +127,7 @@
   /* Le séparateur passe dans l'espace entre les panneaux : aucune bordure
      n'ajoute de décalage vertical à la barre d'onglets. */
   .workspace.split {
-    gap: 1px;
+    gap: 2px;
     background: var(--line);
   }
 
