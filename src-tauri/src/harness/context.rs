@@ -36,7 +36,9 @@ pub struct ContextInput<'a> {
 }
 
 /// Budget approximatif en caractères (aucun tokenizer : ~4 caractères/token).
-const BUDGET_CHARS: usize = 24_000;
+/// Ollama démarre à 4096 tokens de contexte : on garde de la place pour la
+/// réponse en visant ~1500 tokens de prompt.
+const BUDGET_CHARS: usize = 6_000;
 const OUTPUT_CHARS: usize = 1_500;
 const FAILURE_OUTPUT_CHARS: usize = 800;
 

@@ -15,6 +15,10 @@ use crate::storage::CommandDetail;
 use crate::AppState;
 
 const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+/// L'historique de conversation est borné : le contexte du modèle est petit,
+/// et un long échange ne doit pas évincer les instructions système.
+const HISTORY_MESSAGES: usize = 10;
+const HISTORY_CHARS: usize = 4_000;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,7 +135,7 @@ pub async fn chat_send(
         fixes: fix_passages,
     });
 
-    let mut messages = messages;
+    let mut messages = trim_history(messages);
     messages.insert(
         0,
         ChatMessage {
@@ -258,6 +262,23 @@ async fn retrieve_docs(state: &AppState, question: &str) -> Vec<DocPassage> {
     }
 }
 
+/// Garde les derniers messages, dans l'ordre, sous un plafond de caractères.
+fn trim_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    let mut kept = Vec::new();
+    let mut total = 0;
+
+    for message in messages.into_iter().rev() {
+        if kept.len() >= HISTORY_MESSAGES || total + message.content.len() > HISTORY_CHARS {
+            break;
+        }
+        total += message.content.len();
+        kept.push(message);
+    }
+
+    kept.reverse();
+    kept
+}
+
 fn to_context(detail: CommandDetail) -> CommandContext {
     CommandContext {
         cmd: detail.row.cmd,
@@ -374,6 +395,30 @@ async fn request(
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn historique_borne_en_gardant_les_messages_recents() {
+        let messages: Vec<ChatMessage> = (0..30)
+            .map(|index| ChatMessage {
+                role: if index % 2 == 0 { "user" } else { "assistant" }.into(),
+                content: format!("message {index} {}", "x".repeat(300)),
+            })
+            .collect();
+
+        let kept = trim_history(messages);
+        assert!(kept.len() <= HISTORY_MESSAGES);
+        assert!(kept.iter().map(|m| m.content.len()).sum::<usize>() <= HISTORY_CHARS);
+        assert!(kept.last().unwrap().content.starts_with("message 29"));
+    }
+
+    #[test]
+    fn historique_court_inchange() {
+        let messages = vec![
+            ChatMessage { role: "user".into(), content: "bonjour".into() },
+            ChatMessage { role: "assistant".into(), content: "salut".into() },
+        ];
+        assert_eq!(trim_history(messages.clone()).len(), 2);
+    }
 
     #[test]
     fn le_contexte_contient_l_erreur_reelle() {
