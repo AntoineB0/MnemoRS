@@ -18,8 +18,8 @@ pub fn search(
 
     let mut scored: Vec<(i64, f32)> = db
         .all_embeddings(embed_model)?
-        .into_iter()
-        .map(|(id, vector)| (id, docs::cosine(query_vector, &vector)))
+        .iter()
+        .map(|(id, vector)| (*id, docs::cosine(query_vector, vector)))
         .collect();
     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     let vector_ids: Vec<i64> = scored

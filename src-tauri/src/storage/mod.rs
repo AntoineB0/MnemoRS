@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use rusqlite::{params, Connection};
@@ -42,6 +43,9 @@ pub struct CommandDetail {
 
 pub struct Db {
     conn: Mutex<Connection>,
+    // Vecteurs décodés par modèle : les relire à chaque question coûte
+    // proportionnellement à la taille de l'index.
+    vectors: Mutex<HashMap<String, Arc<Vec<(i64, Vec<f32>)>>>>,
 }
 
 /// Restreint un fichier ou un dossier à son propriétaire. L'historique contient
@@ -79,6 +83,7 @@ impl Db {
         migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
+            vectors: Mutex::new(HashMap::new()),
         })
     }
 
@@ -246,6 +251,8 @@ impl Db {
             }
         }
         tx.commit()?;
+        drop(conn);
+        self.invalidate_vectors();
         Ok(())
     }
 
@@ -267,16 +274,35 @@ impl Db {
         Ok(rows.collect::<rusqlite::Result<Vec<i64>>>()?)
     }
 
-    pub fn all_embeddings(&self, embed_model: &str) -> Result<Vec<(i64, Vec<f32>)>> {
-        let conn = self.conn()?;
-        let mut stmt =
-            conn.prepare("SELECT id, embedding FROM doc_chunks WHERE embed_model = ?1")?;
-        let rows = stmt.query_map(params![embed_model], |row| {
-            let id: i64 = row.get(0)?;
-            let bytes: Vec<u8> = row.get(1)?;
-            Ok((id, docs::decode_embedding(&bytes)))
-        })?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    pub fn all_embeddings(&self, embed_model: &str) -> Result<Arc<Vec<(i64, Vec<f32>)>>> {
+        if let Ok(cache) = self.vectors.lock() {
+            if let Some(vectors) = cache.get(embed_model) {
+                return Ok(Arc::clone(vectors));
+            }
+        }
+
+        let vectors = {
+            let conn = self.conn()?;
+            let mut stmt =
+                conn.prepare("SELECT id, embedding FROM doc_chunks WHERE embed_model = ?1")?;
+            let rows = stmt.query_map(params![embed_model], |row| {
+                let id: i64 = row.get(0)?;
+                let bytes: Vec<u8> = row.get(1)?;
+                Ok((id, docs::decode_embedding(&bytes)))
+            })?;
+            Arc::new(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        };
+
+        if let Ok(mut cache) = self.vectors.lock() {
+            cache.insert(embed_model.to_string(), Arc::clone(&vectors));
+        }
+        Ok(vectors)
+    }
+
+    fn invalidate_vectors(&self) {
+        if let Ok(mut cache) = self.vectors.lock() {
+            cache.clear();
+        }
     }
 
     pub fn doc_chunk(&self, id: i64) -> Result<Option<docs::DocChunk>> {
@@ -398,6 +424,8 @@ impl Db {
         tx.execute("DELETE FROM doc_chunks", [])?;
         tx.execute("DELETE FROM doc_sources", [])?;
         tx.commit()?;
+        drop(conn);
+        self.invalidate_vectors();
         Ok(())
     }
 
@@ -923,6 +951,23 @@ mod tests {
         db.clear_docs().unwrap();
         assert!(db.all_embeddings("m").unwrap().is_empty());
         assert_eq!(db.docs_stats().unwrap().chunks, 0);
+    }
+
+    #[test]
+    fn vecteurs_en_cache_invalides_apres_indexation() {
+        let db = db();
+        db.replace_source("man:tar", Some("tar"), &[chunk("OPTIONS", "texte", 0.5)], "m", 10)
+            .unwrap();
+
+        let first = db.all_embeddings("m").unwrap();
+        let second = db.all_embeddings("m").unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+
+        db.replace_source("man:tar", Some("tar"), &[chunk("OPTIONS", "autre", 0.7)], "m", 20)
+            .unwrap();
+        let third = db.all_embeddings("m").unwrap();
+        assert!(!Arc::ptr_eq(&first, &third));
+        assert_eq!(third[0].1, vec![0.7, 1.0, 0.0]);
     }
 
     #[test]
