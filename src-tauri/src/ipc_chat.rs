@@ -14,6 +14,8 @@ use crate::providers::{self, ChatEvent, ChatMessage, ProviderConfig};
 use crate::storage::CommandDetail;
 use crate::AppState;
 
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderView {
@@ -155,9 +157,12 @@ pub async fn chat_send(
     let event = match result {
         _ if cancel.load(Ordering::Relaxed) => ChatEvent::Cancelled,
         Ok(()) => ChatEvent::Done,
-        Err(error) => ChatEvent::Error {
-            message: format!("{error:#}"),
-        },
+        Err(error) => {
+            log::warn!("chat : {error:#}");
+            ChatEvent::Error {
+                message: format!("{error:#}"),
+            }
+        }
     };
     let _ = on_event.send(event);
     Ok(())
@@ -287,11 +292,23 @@ where
     let mut stream = response.bytes_stream();
     let mut buffer = Vec::new();
 
-    while let Some(chunk) = stream.next().await {
+    loop {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        buffer.extend_from_slice(&chunk.context("lecture du flux")?);
+
+        // Sans données pendant ce délai, on considère le provider muet : le
+        // flux est coupé pour ne pas laisser l'interface bloquée.
+        let next = tokio::time::timeout(IDLE_TIMEOUT, stream.next()).await;
+        let chunk = match next {
+            Err(_) => bail!(
+                "le modèle n'a rien envoyé pendant {} s",
+                IDLE_TIMEOUT.as_secs()
+            ),
+            Ok(None) => break,
+            Ok(Some(chunk)) => chunk.context("lecture du flux")?,
+        };
+        buffer.extend_from_slice(&chunk);
 
         for payload in providers::sse::take_events(&mut buffer) {
             if payload.trim() == "[DONE]" {
@@ -301,12 +318,26 @@ where
                 Ok(value) => value,
                 Err(_) => continue,
             };
+
+            if let Some(error) = value.get("error") {
+                let message = error["message"]
+                    .as_str()
+                    .or_else(|| error.as_str())
+                    .unwrap_or("erreur du provider");
+                bail!("{message}");
+            }
+
             if let Some(text) = value["choices"][0]["delta"]["content"].as_str() {
                 if !text.is_empty() {
                     emit(ChatEvent::Delta {
                         text: text.to_string(),
                     });
                 }
+            }
+
+            // Certains providers terminent sans envoyer [DONE].
+            if value["choices"][0]["finish_reason"].is_string() {
+                return Ok(());
             }
         }
     }
@@ -406,6 +437,42 @@ mod tests {
         let answer = text.lock().unwrap().clone();
         println!("réponse : {answer}");
         assert!(!answer.trim().is_empty(), "réponse vide");
+    }
+
+    #[tokio::test]
+    async fn erreur_du_provider_remontee() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf);
+            let body = "data: {\"error\":{\"message\":\"model requires more system memory\"}}\n\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).unwrap();
+        });
+
+        let provider = ProviderConfig {
+            id: "test".into(),
+            name: "test".into(),
+            base_url: format!("http://{addr}/v1"),
+            model: "modele".into(),
+        };
+        let cancel = AtomicBool::new(false);
+        let error = stream_chat(&provider, None, Vec::new(), &cancel, |_| {})
+            .await
+            .unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("memory"),
+            "erreur : {error:#}"
+        );
     }
 
     #[tokio::test]

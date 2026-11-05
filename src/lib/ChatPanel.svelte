@@ -101,7 +101,10 @@
       })
     } catch (e) {
       error = String(e)
+    } finally {
+      // Garde-fou : même si l'événement final se perd, l'envoi redevient possible.
       streaming = false
+      requestId = ''
     }
   }
 
