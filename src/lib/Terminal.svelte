@@ -20,12 +20,12 @@
       cursorBlink: true,
       cursorStyle: 'block',
       theme: {
-        background: '#00241e',
+        background: '#252926',
         foreground: '#f2ede0',
         cursor: '#00ff88',
-        cursorAccent: '#00241e',
-        selectionBackground: '#0c5b4b',
-        black: '#00241e',
+        cursorAccent: '#252926',
+        selectionBackground: '#3a403b',
+        black: '#252926',
         red: '#ff8a73',
         green: '#00ff88',
         yellow: '#e8d48b',
@@ -33,7 +33,7 @@
         magenta: '#e0a8c8',
         cyan: '#8fe3d8',
         white: '#f2ede0',
-        brightBlack: '#5f7a71',
+        brightBlack: '#6b736c',
         brightRed: '#ffab99',
         brightGreen: '#5cffb0',
         brightYellow: '#f2e3a8',
@@ -68,7 +68,7 @@
         term.write(`\r\n\x1b[38;2;255;138;115m[pty] ${event.message}\x1b[0m\r\n`)
       else
         term.write(
-          `\r\n\x1b[38;2;159;184;174m[processus terminé : ${event.code ?? '?'}]\x1b[0m\r\n`,
+          `\r\n\x1b[38;2;169;177;170m[processus terminé : ${event.code ?? '?'}]\x1b[0m\r\n`,
         )
     }
 

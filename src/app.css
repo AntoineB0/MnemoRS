@@ -1,12 +1,12 @@
 :root {
   color-scheme: dark;
 
-  --void: #00241e;
-  --surface: #003a30;
-  --surface-2: #00483c;
-  --line: #0c5b4b;
+  --void: #252926;
+  --surface: #1f2320;
+  --surface-2: #2b302c;
+  --line: #3a403b;
   --ink: #f2ede0;
-  --ink-dim: #9fb8ae;
+  --ink-dim: #a9b1aa;
   --signal: #00ff88;
   --alert: #ff8a73;
 
