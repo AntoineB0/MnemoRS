@@ -1,4 +1,5 @@
 mod capture;
+mod docs;
 mod harness;
 mod ipc;
 mod ipc_chat;
