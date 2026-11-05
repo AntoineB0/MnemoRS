@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Channel, invoke } from '@tauri-apps/api/core'
+  import { listen } from '@tauri-apps/api/event'
 
   type ProviderView = {
     id: string
@@ -10,15 +11,23 @@
     hasKey: boolean
   }
 
-  type DocsSettings = { baseUrl: string; model: string }
-  type DocsStats = { chunks: number; sources: string[]; models: string[] }
+  type DocsSettings = { baseUrl: string; model: string; autoIndex: boolean }
+  type DocsStats = { chunks: number; deleted: number; sources: string[]; models: string[] }
+  type SyncReport = {
+    indexed: number
+    skipped: number
+    restored: number
+    deleted: number
+    chunks: number
+  }
   type IngestEvent =
     | { type: 'progress'; done: number; total: number; message: string }
-    | { type: 'done'; chunks: number; sources: number }
+    | { type: 'done'; report: SyncReport }
 
-  let docs = $state<DocsSettings>({ baseUrl: '', model: '' })
-  let stats = $state<DocsStats>({ chunks: 0, sources: [], models: [] })
+  let docs = $state<DocsSettings>({ baseUrl: '', model: '', autoIndex: true })
+  let stats = $state<DocsStats>({ chunks: 0, deleted: 0, sources: [], models: [] })
   let ingesting = $state(false)
+  let autoIndexing = $state(false)
   let progress = $state('')
 
   let providers = $state<ProviderView[]>([])
@@ -48,11 +57,28 @@
   onMount(() => {
     void load()
     void loadDocs()
+
+    const stops: (() => void)[] = []
+    listen<boolean>('docs:indexing', (event) => {
+      autoIndexing = event.payload
+    }).then((stop) => stops.push(stop))
+    listen<SyncReport>('docs:indexed', (event) => {
+      if (event.payload.indexed > 0 || event.payload.deleted > 0) {
+        message = `Indexation automatique : ${event.payload.indexed} source(s) mise(s) à jour.`
+      }
+      void loadDocs()
+    }).then((stop) => stops.push(stop))
+
+    return () => stops.forEach((stop) => stop())
   })
 
   async function saveDocs() {
     try {
-      await invoke('docs_set_settings', { baseUrl: docs.baseUrl, model: docs.model })
+      await invoke('docs_set_settings', {
+        baseUrl: docs.baseUrl,
+        model: docs.model,
+        autoIndex: docs.autoIndex,
+      })
       message = "Réglages d'indexation enregistrés."
     } catch (e) {
       error = String(e)
@@ -65,14 +91,23 @@
     message = ''
     progress = ''
     try {
-      await invoke('docs_set_settings', { baseUrl: docs.baseUrl, model: docs.model })
+      await invoke('docs_set_settings', {
+        baseUrl: docs.baseUrl,
+        model: docs.model,
+        autoIndex: docs.autoIndex,
+      })
       const channel = new Channel<IngestEvent>()
       channel.onmessage = (event) => {
         if (event.type === 'progress') {
           progress = `${event.done}/${event.total} — ${event.message}`
         } else {
           progress = ''
-          message = `${event.chunks} chunks indexés depuis ${event.sources} sources.`
+          const report = event.report
+          message =
+            `${report.indexed} source(s) indexée(s), ${report.skipped} inchangée(s)` +
+            (report.restored ? `, ${report.restored} restaurée(s)` : '') +
+            (report.deleted ? `, ${report.deleted} supprimée(s)` : '') +
+            ` — ${report.chunks} chunks.`
         }
       }
       await invoke('docs_ingest', { onEvent: channel })
@@ -208,6 +243,7 @@
     <h3>Documentation indexée</h3>
     <p class="muted">
       {stats.chunks} chunks · {stats.sources.length} sources
+      {#if stats.deleted}· {stats.deleted} chunks de documents supprimés{/if}
       {#if stats.models.length}· modèle {stats.models.join(', ')}{/if}
     </p>
 
@@ -220,6 +256,11 @@
       <input bind:value={docs.model} placeholder="bge-m3" />
     </label>
 
+    <label class="check">
+      <input type="checkbox" bind:checked={docs.autoIndex} />
+      indexer automatiquement au démarrage et au changement de dossier
+    </label>
+
     <div class="actions">
       <button onclick={ingest} disabled={ingesting}>
         {ingesting ? 'indexation…' : 'indexer'}
@@ -228,6 +269,7 @@
       <button class="danger" onclick={clearDocs} disabled={ingesting}>vider</button>
     </div>
 
+    {#if autoIndexing}<p class="muted">indexation automatique en cours…</p>{/if}
     {#if progress}<p class="muted">{progress}</p>{/if}
 
     {#if stats.sources.length}
@@ -378,6 +420,14 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: #9b9bab;
+  }
+
+  .check {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    color: #9b9bab;
+    font-size: 11px;
   }
 
   .docs .actions {
