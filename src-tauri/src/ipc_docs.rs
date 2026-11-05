@@ -104,7 +104,6 @@ pub async fn docs_ingest(
     let _ = on_event.send(IngestEvent::Done {
         report: report.clone(),
     });
-    let _ = db.set_setting("last_index_ts", &crate::storage::now_ms().to_string());
     Ok(())
 }
 
@@ -135,7 +134,6 @@ pub async fn auto_sync(app: AppHandle, db: Arc<Db>, cwd: String) -> anyhow::Resu
     if tools_changed {
         store_system_fingerprint(&db);
     }
-    let _ = db.set_setting("last_index_ts", &crate::storage::now_ms().to_string());
     let _ = app.emit("docs:indexed", &report);
     Ok(report)
 }
