@@ -13,6 +13,10 @@ else
 fi
 unset _mnemors_zdotdir MNEMORS_ORIGINAL_ZDOTDIR
 
+# zsh ajoute sinon un marqueur de fin de ligne (% + espaces) avant notre
+# marqueur de fin de commande, qui finirait enregistré dans l'historique.
+unsetopt PROMPT_SP
+
 _mnemors_osc() { printf '\033]%s\a' "$1" }
 
 # La commande est passée en hexadécimal pour survivre aux sauts de ligne et

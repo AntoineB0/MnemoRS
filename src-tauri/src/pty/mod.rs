@@ -257,6 +257,54 @@ mod tests {
     }
 
     #[test]
+    fn commande_sans_sortie_n_enregistre_rien() {
+        if !Path::new("/usr/bin/zsh").exists() {
+            return;
+        }
+
+        let state_dir = std::env::temp_dir().join("mnemors-test-empty");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        let records = Arc::new(StdMutex::new(Vec::<CommandRecord>::new()));
+        let sink = records.clone();
+        let mut capture = Capture::default();
+        let tap = move |text: &str| {
+            let (visible, captured) = capture.feed(text);
+            sink.lock().unwrap().extend(captured);
+            visible
+        };
+
+        let mut session = spawn(
+            "/usr/bin/zsh",
+            None,
+            80,
+            24,
+            &state_dir,
+            tap,
+            |_| true,
+        )
+        .expect("spawn de zsh");
+
+        session.write(b"false\n").expect("écriture");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if !records.lock().unwrap().is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        session.kill();
+        std::fs::remove_dir_all(&state_dir).ok();
+
+        let records = records.lock().unwrap();
+        assert_eq!(records.len(), 1, "enregistrements : {records:?}");
+        assert_eq!(records[0].exit_code, 1);
+        assert_eq!(records[0].output, "");
+    }
+
+    #[test]
     fn ctrl_c_produit_le_code_130() {
         if !Path::new("/usr/bin/zsh").exists() {
             return;
