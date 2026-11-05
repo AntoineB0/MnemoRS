@@ -16,10 +16,18 @@
 
   type CommandDetail = CommandRow & { output: string }
 
+  type FixRow = {
+    id: number
+    fixCmd: string
+    status: string
+    confidence: number
+  }
+
   let query = $state('')
   let onlyFailed = $state(false)
   let rows = $state<CommandRow[]>([])
   let selected = $state<CommandDetail | null>(null)
+  let fix = $state<FixRow | null>(null)
   let loading = $state(false)
   let error = $state('')
 
@@ -57,10 +65,25 @@
   async function toggle(row: CommandRow) {
     if (selected?.id === row.id) {
       selected = null
+      fix = null
       return
     }
     try {
       selected = await invoke<CommandDetail | null>('history_get', { id: row.id })
+      fix =
+        row.exitCode !== 0
+          ? await invoke<FixRow | null>('fixes_for', { cmdId: row.id })
+          : null
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  async function removeFix() {
+    if (!fix) return
+    try {
+      await invoke('fixes_delete', { id: fix.id })
+      fix = null
     } catch (e) {
       error = String(e)
     }
@@ -131,6 +154,17 @@
             {:else}
               <p class="muted">Aucune sortie.</p>
             {/if}
+            {#if fix}
+              <div class="fix">
+                <p class="muted">
+                  correction associée
+                  {fix.status === 'suggested' ? '(à valider dans les réglages)' : ''}
+                </p>
+                <pre>$ {fix.fixCmd}</pre>
+                <button class="copy" onclick={removeFix}>retirer cette correction</button>
+              </div>
+            {/if}
+
             <button class="copy" onclick={() => copy(row.cmd)}>copier la commande</button>
           </div>
         {/if}
@@ -277,6 +311,17 @@
     color: #c084fc;
     border-radius: 3px;
     padding: 0 4px;
+  }
+
+  .fix {
+    border-top: 1px solid #22232e;
+    margin-top: 8px;
+    padding-top: 8px;
+  }
+
+  .fix pre {
+    margin-bottom: 6px;
+    color: #8bd49c;
   }
 
   .copy {

@@ -20,6 +20,19 @@
     deleted: number
     chunks: number
   }
+  type FixSettings = { windowMinutes: number; autoThreshold: number; suggestThreshold: number }
+  type FixRow = {
+    id: number
+    failedCmdId: number
+    fixCmdId: number
+    failedCmd: string
+    fixCmd: string
+    cwd: string | null
+    confidence: number
+    status: string
+    ts: number
+  }
+
   type IngestEvent =
     | { type: 'progress'; done: number; total: number; message: string }
     | { type: 'done'; report: SyncReport }
@@ -29,6 +42,12 @@
   let ingesting = $state(false)
   let autoIndexing = $state(false)
   let progress = $state('')
+  let fixSettings = $state<FixSettings>({
+    windowMinutes: 10,
+    autoThreshold: 0.85,
+    suggestThreshold: 0.5,
+  })
+  let pendingFixes = $state<FixRow[]>([])
 
   let providers = $state<ProviderView[]>([])
   let editing = $state<ProviderView | null>(null)
@@ -54,9 +73,42 @@
     }
   }
 
+  async function loadFixes() {
+    try {
+      fixSettings = await invoke<FixSettings>('fixes_settings')
+      pendingFixes = await invoke<FixRow[]>('fixes_pending')
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  async function saveFixes() {
+    try {
+      await invoke('fixes_set_settings', {
+        windowMinutes: fixSettings.windowMinutes,
+        autoThreshold: fixSettings.autoThreshold,
+        suggestThreshold: fixSettings.suggestThreshold,
+      })
+      await loadFixes()
+      message = 'Réglages des corrections enregistrés.'
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
+  async function decideFix(fix: FixRow, status: 'confirmed' | 'rejected') {
+    try {
+      await invoke('fixes_set_status', { id: fix.id, status })
+      await loadFixes()
+    } catch (e) {
+      error = String(e)
+    }
+  }
+
   onMount(() => {
     void load()
     void loadDocs()
+    void loadFixes()
 
     const stops: (() => void)[] = []
     listen<boolean>('docs:indexing', (event) => {
@@ -281,6 +333,53 @@
     {/if}
   </section>
 
+  <section class="docs">
+    <h3>Corrections</h3>
+    <p class="muted">
+      Un couple échec → correction est repéré quand une commande réussie suit un échec,
+      dans le même dossier et dans la fenêtre ci-dessous.
+    </p>
+
+    <div class="grid">
+      <label>
+        fenêtre (minutes)
+        <input type="number" min="1" max="1440" bind:value={fixSettings.windowMinutes} />
+      </label>
+      <label>
+        seuil automatique
+        <input type="number" min="0" max="1" step="0.05" bind:value={fixSettings.autoThreshold} />
+      </label>
+      <label>
+        seuil de suggestion
+        <input type="number" min="0" max="1" step="0.05" bind:value={fixSettings.suggestThreshold} />
+      </label>
+    </div>
+
+    <div class="actions">
+      <button onclick={saveFixes}>enregistrer</button>
+    </div>
+
+    {#if pendingFixes.length}
+      <p class="muted">{pendingFixes.length} correction(s) à valider</p>
+      <ul class="fixes">
+        {#each pendingFixes as fix (fix.id)}
+          <li>
+            <code>$ {fix.failedCmd}</code>
+            <span class="arrow">→</span>
+            <code>$ {fix.fixCmd}</code>
+            <span class="score">{Math.round(fix.confidence * 100)} %</span>
+            <span class="actions">
+              <button onclick={() => decideFix(fix, 'confirmed')}>✓</button>
+              <button class="danger" onclick={() => decideFix(fix, 'rejected')}>✗</button>
+            </span>
+          </li>
+        {/each}
+      </ul>
+    {:else}
+      <p class="muted">Aucune correction en attente.</p>
+    {/if}
+  </section>
+
   {#if message}<p class="ok">{message}</p>{/if}
   {#if error}<p class="error">{error}</p>{/if}
   <p class="hint">
@@ -432,6 +531,51 @@
 
   .docs .actions {
     flex-wrap: wrap;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .fixes {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .fixes li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid #2a2b38;
+    border-radius: 4px;
+    padding: 6px;
+    font-size: 11px;
+  }
+
+  .fixes code {
+    font-family: ui-monospace, monospace;
+    overflow-wrap: anywhere;
+  }
+
+  .arrow {
+    color: #82839a;
+  }
+
+  .score {
+    color: #9b9bab;
+    margin-left: auto;
+  }
+
+  .fixes .actions {
+    display: flex;
+    gap: 4px;
   }
 
   .sources {
