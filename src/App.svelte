@@ -1,6 +1,9 @@
 <script lang="ts">
   import Terminal from './lib/Terminal.svelte'
   import Sidebar from './lib/Sidebar.svelte'
+  import { loadTheme } from './lib/theme.svelte'
+
+  loadTheme()
 </script>
 
 <main class="layout">

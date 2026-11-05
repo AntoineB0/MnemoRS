@@ -219,7 +219,7 @@
   }
 
   .search::placeholder {
-    color: #5f7a71;
+    color: var(--ink-faint);
   }
 
   .search:focus {

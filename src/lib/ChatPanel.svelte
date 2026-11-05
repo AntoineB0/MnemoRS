@@ -103,13 +103,16 @@
 
 <div class="chat">
   <div class="bar">
-    <select bind:value={providerId} disabled={streaming}>
-      {#each providers as provider (provider.id)}
-        <option value={provider.id}>{provider.name} · {provider.model}</option>
-      {:else}
-        <option value="">aucun provider</option>
-      {/each}
-    </select>
+    <div class="select">
+      <select bind:value={providerId} disabled={streaming}>
+        {#each providers as provider (provider.id)}
+          <option value={provider.id}>{provider.name} · {provider.model}</option>
+        {:else}
+          <option value="">aucun provider</option>
+        {/each}
+      </select>
+      <span class="chevron"></span>
+    </div>
     <button onclick={clear} disabled={streaming || messages.length === 0}>effacer</button>
   </div>
 
@@ -169,16 +172,32 @@
     border: 1px solid var(--line);
   }
 
-  select {
+  .select {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+  }
+
+  .select select {
     flex: 1;
     min-width: 0;
     padding: 5px 26px 5px 6px;
     font-size: 11.5px;
     appearance: none;
     -webkit-appearance: none;
-    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9b1aa' stroke-width='1.5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
+  }
+
+  .chevron {
+    position: absolute;
+    right: 9px;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid var(--ink-dim);
+    border-bottom: 1.5px solid var(--ink-dim);
+    transform: translateY(-70%) rotate(45deg);
+    pointer-events: none;
   }
 
   button {
@@ -193,8 +212,8 @@
   }
 
   button:disabled {
-    color: #5f7a71;
-    border-color: #0a4a3d;
+    color: var(--ink-faint);
+    border-color: var(--line);
     cursor: default;
   }
 
@@ -251,7 +270,7 @@
   }
 
   textarea::placeholder {
-    color: #5f7a71;
+    color: var(--ink-faint);
   }
 
   textarea:focus,

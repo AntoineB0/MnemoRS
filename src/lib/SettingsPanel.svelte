@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { Channel, invoke } from '@tauri-apps/api/core'
   import { listen } from '@tauri-apps/api/event'
+  import { theme, presets, applyTheme, saveCustom, deleteCustom, type Theme } from './theme.svelte'
 
   type ProviderView = {
     id: string
@@ -48,6 +49,7 @@
     suggestThreshold: 0.5,
   })
   let pendingFixes = $state<FixRow[]>([])
+  let draft = $state<Theme>({ ...theme.current })
 
   let providers = $state<ProviderView[]>([])
   let editing = $state<ProviderView | null>(null)
@@ -94,6 +96,20 @@
     } catch (e) {
       error = String(e)
     }
+  }
+
+  function previewTheme() {
+    applyTheme(draft, false)
+  }
+
+  function useTheme(preset: Theme) {
+    draft = { ...preset }
+    applyTheme(draft)
+  }
+
+  function saveTheme() {
+    saveCustom({ ...draft })
+    message = 'Thème enregistré.'
   }
 
   async function decideFix(fix: FixRow, status: 'confirmed' | 'rejected') {
@@ -380,6 +396,52 @@
     {/if}
   </section>
 
+  <section class="docs">
+    <h3>Thème</h3>
+
+    <div class="presets">
+      {#each presets as preset (preset.id)}
+        <button onclick={() => useTheme(preset)}>{preset.name}</button>
+      {/each}
+    </div>
+
+    <div class="grid colors">
+      <label>fond<input type="color" bind:value={draft.void} oninput={previewTheme} /></label>
+      <label>panneau<input type="color" bind:value={draft.surface} oninput={previewTheme} /></label>
+      <label>survol<input type="color" bind:value={draft.surface2} oninput={previewTheme} /></label>
+      <label>bordures<input type="color" bind:value={draft.line} oninput={previewTheme} /></label>
+      <label>texte<input type="color" bind:value={draft.ink} oninput={previewTheme} /></label>
+      <label>secondaire<input type="color" bind:value={draft.inkDim} oninput={previewTheme} /></label>
+      <label>atténué<input type="color" bind:value={draft.inkFaint} oninput={previewTheme} /></label>
+      <label>accent<input type="color" bind:value={draft.signal} oninput={previewTheme} /></label>
+      <label>erreur<input type="color" bind:value={draft.alert} oninput={previewTheme} /></label>
+    </div>
+
+    <label>
+      terminal
+      <select bind:value={draft.mode} onchange={previewTheme}>
+        <option value="dark">sombre</option>
+        <option value="light">clair</option>
+      </select>
+    </label>
+
+    <div class="theme-save">
+      <input bind:value={draft.name} placeholder="nom du thème" />
+      <button onclick={saveTheme}>enregistrer</button>
+    </div>
+
+    {#if theme.custom.length}
+      <ul class="fixes">
+        {#each theme.custom as item (item.id)}
+          <li>
+            <button onclick={() => useTheme(item)}>{item.name}</button>
+            <button class="danger" onclick={() => deleteCustom(item.id)}>supprimer</button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </section>
+
   {#if message}<p class="ok">{message}</p>{/if}
   {#if error}<p class="error">{error}</p>{/if}
   <p class="hint">
@@ -440,13 +502,13 @@
   }
 
   button:disabled {
-    color: #5f7a71;
-    border-color: #0a4a3d;
+    color: var(--ink-faint);
+    border-color: var(--line);
     cursor: default;
   }
 
   .danger {
-    border-color: #5b3030;
+    border-color: var(--alert);
     color: var(--alert);
   }
 
@@ -522,7 +584,7 @@
   }
 
   .hint {
-    color: #5f7a71;
+    color: var(--ink-faint);
     font-size: 11px;
     line-height: 1.5;
   }
@@ -548,6 +610,41 @@
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 8px;
+  }
+
+  .presets {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  input[type='color'] {
+    height: 28px;
+    padding: 2px;
+    background: var(--void);
+    border: 1px solid var(--line);
+    cursor: pointer;
+  }
+
+  .theme-save {
+    display: flex;
+    gap: 6px;
+  }
+
+  .theme-save input {
+    flex: 1;
+    min-width: 0;
+  }
+
+  select {
+    padding: 6px 8px;
+    background: var(--void);
+    border: 1px solid var(--line);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 12px;
+    appearance: none;
+    -webkit-appearance: none;
   }
 
   .check {
