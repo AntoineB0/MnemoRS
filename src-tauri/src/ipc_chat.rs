@@ -169,7 +169,6 @@ fn to_context(detail: CommandDetail) -> CommandContext {
         cwd: detail.row.cwd,
         exit_code: detail.row.exit_code,
         output: detail.output,
-        ts: detail.row.ts,
     }
 }
 

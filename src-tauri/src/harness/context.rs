@@ -7,7 +7,6 @@ pub struct CommandContext {
     pub cwd: Option<String>,
     pub exit_code: Option<i32>,
     pub output: String,
-    pub ts: i64,
 }
 
 pub struct ContextInput<'a> {
@@ -139,7 +138,6 @@ mod tests {
             cwd: Some("/home/moi".into()),
             exit_code: Some(exit_code),
             output: output.into(),
-            ts: 0,
         }
     }
 
