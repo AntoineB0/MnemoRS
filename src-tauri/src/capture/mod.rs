@@ -133,13 +133,21 @@ impl Capture {
     }
 }
 
+/// Vrai si un segment de la commande lance un outil sensible. Les commandes
+/// composées (`cd /tmp && sudo cat …`) sont découpées pour examiner chaque partie.
 fn is_sensitive(cmd: &str) -> bool {
-    let first = cmd.split_whitespace().next().unwrap_or("");
-    let name = first.rsplit('/').next().unwrap_or(first);
-    matches!(
-        name,
-        "sudo" | "su" | "ssh" | "scp" | "pass" | "gpg" | "op" | "vault"
-    )
+    cmd.split(['&', '|', ';', '\n']).any(|segment| {
+        segment
+            .split_whitespace()
+            .find(|word| !word.contains('='))
+            .map(|word| word.rsplit('/').next().unwrap_or(word))
+            .is_some_and(|name| {
+                matches!(
+                    name,
+                    "sudo" | "su" | "ssh" | "scp" | "pass" | "gpg" | "op" | "vault"
+                )
+            })
+    })
 }
 
 fn has_secret_prompt(output: &str) -> bool {
@@ -347,6 +355,22 @@ mod tests {
         assert_eq!(records2.len(), 1);
         assert!(records2[0].sensitive);
         assert_eq!(records2[0].output, "");
+    }
+
+    #[test]
+    fn commande_composee_sensible_detectee() {
+        for cmd in [
+            "cd /tmp && sudo cat /etc/shadow",
+            "ls; su -",
+            "echo ok || ssh hote",
+            "cat fichier | gpg --decrypt",
+            "FOO=1 sudo id",
+        ] {
+            assert!(is_sensitive(cmd), "{cmd} devrait être sensible");
+        }
+        for cmd in ["echo sudo", "ls -la", "git log --grep=pass"] {
+            assert!(!is_sensitive(cmd), "{cmd} ne devrait pas être sensible");
+        }
     }
 
     #[test]
