@@ -1,5 +1,6 @@
 mod capture;
 mod ipc;
+mod ipc_chat;
 mod providers;
 mod pty;
 mod shell;
@@ -7,12 +8,14 @@ mod storage;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
 pub struct AppState {
     pub sessions: Mutex<HashMap<String, pty::Session>>,
+    pub cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
     pub db: Arc<storage::Db>,
     pub data_dir: PathBuf,
 }
@@ -27,6 +30,12 @@ pub fn run() {
             ipc::pty_kill,
             ipc::history_search,
             ipc::history_get,
+            ipc_chat::providers_list,
+            ipc_chat::providers_save,
+            ipc_chat::providers_delete,
+            ipc_chat::providers_test,
+            ipc_chat::chat_send,
+            ipc_chat::chat_cancel,
         ])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
@@ -34,8 +43,15 @@ pub fn run() {
             let db = storage::Db::open(&data_dir.join("mnemors.db"))
                 .map_err(|error| format!("{error:#}"))?;
 
+            if db.list_providers().map(|list| list.is_empty()).unwrap_or(false) {
+                let provider = providers::default_provider();
+                db.save_provider(&provider, storage::now_ms())
+                    .map_err(|error| format!("{error:#}"))?;
+            }
+
             app.manage(AppState {
                 sessions: Mutex::new(HashMap::new()),
+                cancels: Mutex::new(HashMap::new()),
                 db: Arc::new(db),
                 data_dir,
             });

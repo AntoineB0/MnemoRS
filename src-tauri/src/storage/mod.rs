@@ -6,8 +6,12 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use crate::capture::CommandRecord;
+use crate::providers::ProviderConfig;
 
-const MIGRATIONS: &[&str] = &[include_str!("schema.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("schema.sql"),
+    include_str!("providers.sql"),
+];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,6 +156,56 @@ impl Db {
             },
             output: row.get(8)?,
         }))
+    }
+
+    pub fn list_providers(&self) -> Result<Vec<ProviderConfig>> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare("SELECT id, name, base_url, model FROM providers ORDER BY created_ts")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ProviderConfig {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                base_url: row.get(2)?,
+                model: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn get_provider(&self, id: &str) -> Result<Option<ProviderConfig>> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare("SELECT id, name, base_url, model FROM providers WHERE id = ?1")?;
+        let mut rows = stmt.query(params![id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(ProviderConfig {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            base_url: row.get(2)?,
+            model: row.get(3)?,
+        }))
+    }
+
+    pub fn save_provider(&self, provider: &ProviderConfig, ts: i64) -> Result<()> {
+        self.conn()?.execute(
+            "INSERT INTO providers (id, name, base_url, model, created_ts)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+               name = excluded.name,
+               base_url = excluded.base_url,
+               model = excluded.model",
+            params![provider.id, provider.name, provider.base_url, provider.model, ts],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_provider(&self, id: &str) -> Result<()> {
+        self.conn()?
+            .execute("DELETE FROM providers WHERE id = ?1", params![id])?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -304,6 +358,31 @@ mod tests {
         let detail = db.get(id).unwrap().unwrap();
         assert!(detail.row.sensitive);
         assert!(detail.row.output_truncated);
+    }
+
+    #[test]
+    fn providers_persistes_et_mis_a_jour() {
+        let db = db();
+        let provider = ProviderConfig {
+            id: "ollama".into(),
+            name: "Ollama".into(),
+            base_url: "http://localhost:11434/v1".into(),
+            model: "qwen2.5-coder:7b".into(),
+        };
+        db.save_provider(&provider, 1).unwrap();
+        assert_eq!(db.list_providers().unwrap().len(), 1);
+
+        let updated = ProviderConfig {
+            model: "autre".into(),
+            ..provider
+        };
+        db.save_provider(&updated, 2).unwrap();
+        let stored = db.get_provider("ollama").unwrap().unwrap();
+        assert_eq!(stored.model, "autre");
+        assert_eq!(db.list_providers().unwrap().len(), 1);
+
+        db.delete_provider("ollama").unwrap();
+        assert!(db.get_provider("ollama").unwrap().is_none());
     }
 
     #[test]
