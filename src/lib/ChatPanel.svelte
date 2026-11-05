@@ -103,9 +103,10 @@
 
   $effect(() => {
     const count = messages.length
+    const lastLength = messages[count - 1]?.content.length ?? 0
     if (!visible || !list) return
     list.scrollTop = list.scrollHeight
-    void count
+    void lastLength
   })
 
   async function send() {
