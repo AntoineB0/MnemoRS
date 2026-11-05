@@ -1,6 +1,25 @@
 :root {
   color-scheme: dark;
-  font-family: system-ui, sans-serif;
+
+  --void: #00241e;
+  --surface: #003a30;
+  --surface-2: #00483c;
+  --line: #0c5b4b;
+  --ink: #f2ede0;
+  --ink-dim: #9fb8ae;
+  --signal: #00ff88;
+  --alert: #ff8a73;
+
+  --mono: 'JetBrainsMono Nerd Font Mono', 'JetBrains Mono', ui-monospace, monospace;
+  --sans: 'Adwaita Sans', Cantarell, system-ui, sans-serif;
+
+  font-family: var(--sans);
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--void);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -15,6 +34,37 @@ body,
 }
 
 body {
-  background: #12131a;
+  background: var(--void);
   overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 1px solid var(--signal);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--line);
+  color: var(--ink);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }

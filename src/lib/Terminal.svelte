@@ -14,15 +14,33 @@
 
   onMount(() => {
     const term = new Xterm({
-      fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+      fontFamily: "'JetBrainsMono Nerd Font Mono', 'JetBrains Mono', monospace",
       fontSize: 14,
-      lineHeight: 1.2,
+      lineHeight: 1.25,
       cursorBlink: true,
+      cursorStyle: 'block',
       theme: {
-        background: '#12131a',
-        foreground: '#d6d6dd',
-        cursor: '#c084fc',
-        selectionBackground: '#3b3550',
+        background: '#00241e',
+        foreground: '#f2ede0',
+        cursor: '#00ff88',
+        cursorAccent: '#00241e',
+        selectionBackground: '#0c5b4b',
+        black: '#00241e',
+        red: '#ff8a73',
+        green: '#00ff88',
+        yellow: '#e8d48b',
+        blue: '#7fd1c1',
+        magenta: '#e0a8c8',
+        cyan: '#8fe3d8',
+        white: '#f2ede0',
+        brightBlack: '#5f7a71',
+        brightRed: '#ffab99',
+        brightGreen: '#5cffb0',
+        brightYellow: '#f2e3a8',
+        brightBlue: '#a3e3d6',
+        brightMagenta: '#f0c6dc',
+        brightCyan: '#b8f0e8',
+        brightWhite: '#ffffff',
       },
     })
     const fit = new FitAddon()
@@ -47,8 +65,11 @@
     channel.onmessage = (event) => {
       if (event.type === 'data') term.write(event.chunk)
       else if (event.type === 'error')
-        term.write(`\r\n\x1b[31m[pty] ${event.message}\x1b[0m\r\n`)
-      else term.write(`\r\n\x1b[90m[processus terminé : ${event.code ?? '?'}]\x1b[0m\r\n`)
+        term.write(`\r\n\x1b[38;2;255;138;115m[pty] ${event.message}\x1b[0m\r\n`)
+      else
+        term.write(
+          `\r\n\x1b[38;2;159;184;174m[processus terminé : ${event.code ?? '?'}]\x1b[0m\r\n`,
+        )
     }
 
     invoke<string>('pty_spawn', {
@@ -61,7 +82,9 @@
         ready = true
         term.focus()
       })
-      .catch((error) => term.write(`\r\n\x1b[31m[spawn] ${error}\x1b[0m\r\n`))
+      .catch((error) =>
+        term.write(`\r\n\x1b[38;2;255;138;115m[spawn] ${error}\x1b[0m\r\n`),
+      )
 
     const dataListener = term.onData((data) => {
       if (!ready) return
@@ -110,8 +133,8 @@
     flex: 1;
     min-width: 0;
     min-height: 0;
-    padding: 8px 4px 4px 10px;
-    background: #12131a;
+    padding: 10px 6px 6px 12px;
+    background: var(--void);
   }
 
   :global(.xterm) {

@@ -36,36 +36,47 @@
 
 <style>
   .sidebar {
-    width: 380px;
+    width: 360px;
     min-width: 300px;
     display: flex;
     flex-direction: column;
-    background: #171821;
-    border-left: 1px solid #2a2b38;
-    color: #d6d6dd;
+    background: var(--surface);
+    border-left: 1px solid var(--line);
   }
 
   nav {
     display: flex;
-    border-bottom: 1px solid #2a2b38;
+    border-bottom: 1px solid var(--line);
   }
 
   nav button {
     flex: 1;
-    padding: 9px 4px;
+    position: relative;
+    padding: 11px 8px 10px;
     background: none;
     border: 0;
-    border-bottom: 2px solid transparent;
-    color: #9b9bab;
-    font: 600 11px/1 system-ui, sans-serif;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    color: var(--ink-dim);
+    font-family: var(--mono);
+    font-size: 12px;
     cursor: pointer;
   }
 
+  nav button:hover {
+    color: var(--ink);
+  }
+
   nav button.active {
-    color: #e9d5ff;
-    border-bottom-color: #c084fc;
+    color: var(--ink);
+  }
+
+  nav button.active::after {
+    content: '';
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: -1px;
+    height: 2px;
+    background: var(--signal);
   }
 
   .content {

@@ -181,57 +181,62 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    color: #d6d6dd;
-    font-size: 13px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink);
   }
 
   .filters {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-bottom: 1px solid #2a2b38;
+    gap: 10px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
   }
 
   label {
     display: flex;
-    gap: 4px;
+    gap: 5px;
     align-items: center;
-    color: #9b9bab;
+    color: var(--ink-dim);
     font-size: 11px;
     white-space: nowrap;
     cursor: pointer;
+  }
+
+  input[type='checkbox'] {
+    accent-color: var(--signal);
   }
 
   .search {
     flex: 1;
     min-width: 0;
     padding: 6px 8px;
-    background: #0f1016;
-    border: 1px solid #2a2b38;
-    border-radius: 4px;
-    color: inherit;
+    background: var(--void);
+    border: 1px solid var(--line);
+    color: var(--ink);
     font: inherit;
   }
 
+  .search::placeholder {
+    color: #5f7a71;
+  }
+
   .search:focus {
-    outline: 1px solid #c084fc;
+    outline: 1px solid var(--signal);
+    outline-offset: 0;
   }
 
   ul {
     list-style: none;
     margin: 0;
-    padding: 0 8px 8px;
+    padding: 0 0 8px;
     overflow-y: auto;
     flex: 1;
   }
 
   li {
-    border-bottom: 1px solid #22232e;
-  }
-
-  li.failed .code {
-    color: #f48771;
+    border-bottom: 1px solid var(--line);
   }
 
   .row {
@@ -239,9 +244,10 @@
     flex-direction: column;
     gap: 4px;
     width: 100%;
-    padding: 8px 4px;
+    padding: 9px 12px 9px 14px;
     background: none;
     border: 0;
+    border-left: 2px solid transparent;
     color: inherit;
     text-align: left;
     cursor: pointer;
@@ -249,23 +255,31 @@
   }
 
   .row:hover {
-    background: #1d1e29;
+    background: var(--surface-2);
+  }
+
+  li.failed .row {
+    border-left-color: var(--alert);
   }
 
   .meta {
     display: flex;
-    gap: 8px;
+    gap: 10px;
     align-items: center;
-    color: #82839a;
+    color: var(--ink-dim);
     font-size: 11px;
   }
 
   .code {
+    color: var(--ink);
     font-variant-numeric: tabular-nums;
   }
 
+  li.failed .code {
+    color: var(--alert);
+  }
+
   .cmd {
-    font-family: ui-monospace, monospace;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     display: -webkit-box;
@@ -276,12 +290,12 @@
   }
 
   .detail {
-    padding: 0 4px 10px;
+    padding: 0 12px 12px 14px;
   }
 
   .cwd {
     margin: 0 0 6px;
-    color: #82839a;
+    color: var(--ink-dim);
     font-size: 11px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -291,62 +305,63 @@
   pre {
     margin: 0 0 8px;
     padding: 8px;
-    background: #0f1016;
-    border: 1px solid #22232e;
-    border-radius: 4px;
-    max-height: 260px;
+    background: var(--void);
+    border: 1px solid var(--line);
+    max-height: 240px;
     overflow: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    font-size: 12px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink);
   }
 
   .muted {
-    color: #82839a;
+    color: var(--ink-dim);
     margin: 0 0 6px;
   }
 
   .tag {
-    border: 1px solid #5a3b6b;
-    color: #c084fc;
-    border-radius: 3px;
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
     padding: 0 4px;
+    font-size: 10px;
   }
 
   .fix {
-    border-top: 1px solid #22232e;
+    border-top: 1px solid var(--line);
     margin-top: 8px;
     padding-top: 8px;
   }
 
   .fix pre {
     margin-bottom: 6px;
-    color: #8bd49c;
+    color: var(--signal);
   }
 
   .copy {
     padding: 4px 8px;
-    background: #242535;
-    border: 1px solid #34354a;
-    border-radius: 4px;
-    color: #d6d6dd;
+    background: none;
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
     cursor: pointer;
     font: inherit;
     font-size: 11px;
   }
 
   .copy:hover {
-    background: #2d2e42;
+    color: var(--ink);
+    border-color: var(--signal);
   }
 
   .error {
     margin: 6px 12px;
-    color: #f48771;
+    color: var(--alert);
   }
 
   .empty {
-    padding: 16px 8px;
-    color: #82839a;
+    padding: 16px 12px;
+    color: var(--ink-dim);
     border: 0;
   }
 </style>

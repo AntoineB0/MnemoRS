@@ -12,6 +12,6 @@
   .layout {
     height: 100%;
     display: flex;
-    background: #12131a;
+    background: var(--void);
   }
 </style>
