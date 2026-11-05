@@ -44,6 +44,7 @@ select,
 textarea {
   font-family: inherit;
   color: inherit;
+  border-radius: 0;
 }
 
 :focus-visible {

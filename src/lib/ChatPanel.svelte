@@ -172,8 +172,13 @@
   select {
     flex: 1;
     min-width: 0;
-    padding: 5px 6px;
+    padding: 5px 26px 5px 6px;
     font-size: 11.5px;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a9b1aa' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
   }
 
   button {
