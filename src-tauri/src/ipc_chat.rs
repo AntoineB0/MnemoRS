@@ -263,20 +263,43 @@ async fn retrieve_docs(state: &AppState, question: &str) -> Vec<DocPassage> {
 }
 
 /// Garde les derniers messages, dans l'ordre, sous un plafond de caractères.
+/// Le dernier message est toujours conservé, tronqué si besoin : c'est la question.
 fn trim_history(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     let mut kept = Vec::new();
     let mut total = 0;
 
-    for message in messages.into_iter().rev() {
-        if kept.len() >= HISTORY_MESSAGES || total + message.content.len() > HISTORY_CHARS {
+    for mut message in messages.into_iter().rev() {
+        if kept.len() >= HISTORY_MESSAGES {
             break;
         }
+
+        let remaining = HISTORY_CHARS.saturating_sub(total);
+        if message.content.len() > remaining {
+            if kept.is_empty() {
+                message.content = truncate(&message.content, remaining);
+                kept.push(message);
+            }
+            break;
+        }
+
         total += message.content.len();
         kept.push(message);
     }
 
     kept.reverse();
     kept
+}
+
+/// Tronque sans couper un caractère multi-octets.
+fn truncate(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text[..end].to_string()
 }
 
 fn to_context(detail: CommandDetail) -> CommandContext {
@@ -418,6 +441,21 @@ mod tests {
             ChatMessage { role: "assistant".into(), content: "salut".into() },
         ];
         assert_eq!(trim_history(messages.clone()).len(), 2);
+    }
+
+    #[test]
+    fn question_longue_conservee_tronquee() {
+        let long = format!("début {}", "é".repeat(HISTORY_CHARS));
+        let messages = vec![
+            ChatMessage { role: "user".into(), content: "avant".into() },
+            ChatMessage { role: "user".into(), content: long },
+        ];
+
+        let kept = trim_history(messages);
+
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].content.starts_with("début "));
+        assert!(kept[0].content.len() <= HISTORY_CHARS);
     }
 
     #[test]
