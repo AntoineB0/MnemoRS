@@ -11,7 +11,10 @@ use crate::providers::ProviderConfig;
 const MIGRATIONS: &[&str] = &[
     include_str!("schema.sql"),
     include_str!("providers.sql"),
+    include_str!("docs.sql"),
 ];
+
+pub mod docs;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -192,6 +195,147 @@ impl Db {
             },
             output: row.get(8)?,
         }))
+    }
+
+    pub fn replace_source(
+        &self,
+        source: &str,
+        tool: Option<&str>,
+        chunks: &[docs::NewChunk],
+        embed_model: &str,
+        ts: i64,
+    ) -> Result<()> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM doc_chunks WHERE source = ?1", params![source])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO doc_chunks
+                   (source, tool, section, content, embed_model, embedding, ts)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for chunk in chunks {
+                stmt.execute(params![
+                    source,
+                    tool,
+                    chunk.section,
+                    chunk.content,
+                    embed_model,
+                    docs::encode_embedding(&chunk.embedding),
+                    ts,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn search_docs_fts(&self, query: &str, embed_model: &str, limit: usize) -> Result<Vec<i64>> {
+        let fts = fts_query(query);
+        if fts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT c.id
+             FROM doc_chunks c
+             JOIN doc_chunks_fts f ON f.rowid = c.id
+             WHERE doc_chunks_fts MATCH ?1 AND c.embed_model = ?2
+             ORDER BY f.rank
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![fts, embed_model, limit as i64], |row| row.get(0))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<i64>>>()?)
+    }
+
+    pub fn all_embeddings(&self, embed_model: &str) -> Result<Vec<(i64, Vec<f32>)>> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare("SELECT id, embedding FROM doc_chunks WHERE embed_model = ?1")?;
+        let rows = stmt.query_map(params![embed_model], |row| {
+            let id: i64 = row.get(0)?;
+            let bytes: Vec<u8> = row.get(1)?;
+            Ok((id, docs::decode_embedding(&bytes)))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn doc_chunk(&self, id: i64) -> Result<Option<docs::DocChunk>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, source, tool, section, content FROM doc_chunks WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(docs::DocChunk {
+            id: row.get(0)?,
+            source: row.get(1)?,
+            tool: row.get(2)?,
+            section: row.get(3)?,
+            content: row.get(4)?,
+        }))
+    }
+
+    pub fn docs_stats(&self) -> Result<docs::DocsStats> {
+        let conn = self.conn()?;
+        let chunks = conn.query_row("SELECT COUNT(*) FROM doc_chunks", [], |row| row.get(0))?;
+        let mut stmt = conn.prepare("SELECT DISTINCT source FROM doc_chunks ORDER BY source")?;
+        let sources = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        let mut stmt = conn.prepare("SELECT DISTINCT embed_model FROM doc_chunks")?;
+        let models = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(docs::DocsStats {
+            chunks,
+            sources,
+            models,
+        })
+    }
+
+    pub fn clear_docs(&self) -> Result<()> {
+        self.conn()?.execute("DELETE FROM doc_chunks", [])?;
+        Ok(())
+    }
+
+    pub fn tool_names(&self) -> Result<Vec<String>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT cmd FROM commands")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut names = std::collections::BTreeSet::new();
+        for cmd in rows {
+            let Some(word) = cmd?.split_whitespace().next().map(str::to_string) else {
+                continue;
+            };
+            let name = word.rsplit('/').next().unwrap_or(&word).to_string();
+            let valid = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.'));
+            if valid {
+                names.insert(name);
+            }
+        }
+        Ok(names.into_iter().collect())
+    }
+
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
+        let mut rows = stmt.query(params![key])?;
+        Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        self.conn()?.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     pub fn list_providers(&self) -> Result<Vec<ProviderConfig>> {
@@ -419,6 +563,81 @@ mod tests {
 
         db.delete_provider("ollama").unwrap();
         assert!(db.get_provider("ollama").unwrap().is_none());
+    }
+
+    fn chunk(section: &str, content: &str, seed: f32) -> docs::NewChunk {
+        docs::NewChunk {
+            section: Some(section.into()),
+            content: content.into(),
+            embedding: vec![seed, 1.0, 0.0],
+        }
+    }
+
+    #[test]
+    fn remplacement_de_source_et_recherche_fts() {
+        let db = db();
+        db.replace_source(
+            "man:tar",
+            Some("tar"),
+            &[
+                chunk("OPTIONS", "extraire une archive avec -x", 0.1),
+                chunk("OPTIONS", "compresser avec -c", 0.2),
+            ],
+            "bge-m3:1024",
+            10,
+        )
+        .unwrap();
+
+        let ids = db.search_docs_fts("extraire", "bge-m3:1024", 5).unwrap();
+        assert_eq!(ids.len(), 1);
+        let found = db.doc_chunk(ids[0]).unwrap().unwrap();
+        assert!(found.content.contains("extraire"));
+        assert_eq!(found.source, "man:tar");
+
+        db.replace_source("man:tar", Some("tar"), &[chunk("NOM", "tar archive", 0.3)], "bge-m3:1024", 20)
+            .unwrap();
+        assert_eq!(db.docs_stats().unwrap().chunks, 1);
+    }
+
+    #[test]
+    fn recherche_filtre_par_modele() {
+        let db = db();
+        db.replace_source("man:tar", Some("tar"), &[chunk("OPTIONS", "extraire", 0.1)], "modele-a", 10)
+            .unwrap();
+        assert!(db.search_docs_fts("extraire", "modele-b", 5).unwrap().is_empty());
+        assert_eq!(db.search_docs_fts("extraire", "modele-a", 5).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn embeddings_relus_et_effaces() {
+        let db = db();
+        db.replace_source("man:tar", Some("tar"), &[chunk("OPTIONS", "texte", 0.5)], "m", 10)
+            .unwrap();
+        let all = db.all_embeddings("m").unwrap();
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].1, vec![0.5, 1.0, 0.0]);
+
+        db.clear_docs().unwrap();
+        assert!(db.all_embeddings("m").unwrap().is_empty());
+        assert_eq!(db.docs_stats().unwrap().chunks, 0);
+    }
+
+    #[test]
+    fn reglages_persistes() {
+        let db = db();
+        assert!(db.get_setting("embed_model").unwrap().is_none());
+        db.set_setting("embed_model", "bge-m3").unwrap();
+        db.set_setting("embed_model", "autre").unwrap();
+        assert_eq!(db.get_setting("embed_model").unwrap().as_deref(), Some("autre"));
+    }
+
+    #[test]
+    fn outils_extraits_de_l_historique() {
+        let db = db();
+        db.insert_command("pty-1", &record("tar -xzf a.tgz", "", 0), 10).unwrap();
+        db.insert_command("pty-1", &record("/usr/bin/git status", "", 0), 20).unwrap();
+        db.insert_command("pty-1", &record("tar -tzf a.tgz", "", 0), 30).unwrap();
+        assert_eq!(db.tool_names().unwrap(), vec!["git".to_string(), "tar".to_string()]);
     }
 
     #[test]
