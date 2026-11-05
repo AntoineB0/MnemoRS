@@ -320,7 +320,7 @@
   }
 
   .text {
-    font-family: var(--sans);
+    font-family: var(--mono);
     font-size: 13.5px;
     line-height: 1.55;
     overflow-wrap: anywhere;
