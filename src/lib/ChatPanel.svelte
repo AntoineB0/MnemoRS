@@ -16,12 +16,29 @@
   }
 
   type ChatEvent =
+    | { type: 'phase'; name: string }
     | { type: 'delta'; text: string }
+    | { type: 'usage'; promptTokens: number; completionTokens: number }
     | { type: 'done' }
     | { type: 'cancelled' }
     | { type: 'error'; message: string }
 
-  type Message = { role: 'user' | 'assistant'; content: string }
+  type Message = {
+    role: 'user' | 'assistant'
+    content: string
+    model?: string
+    phase?: string
+    phaseAt?: number
+    firstAt?: number
+    lastAt?: number
+    doneAt?: number
+    tokens?: number
+  }
+
+  const PHASES: Record<string, string> = {
+    docs: 'Recherche dans la documentation…',
+    thinking: 'Le modèle réfléchit…',
+  }
 
   let providers = $state<ProviderView[]>([])
   let providerId = $state('')
@@ -33,6 +50,9 @@
   let hintTimer: number | undefined
   let requestId = ''
   let list: HTMLDivElement
+  let userName = $state('vous')
+  let now = $state(Date.now())
+  let ticker: number | undefined
 
   const current = $derived(providers.find((p) => p.id === providerId))
 
@@ -97,8 +117,14 @@
 
   onMount(() => {
     void loadProviders()
+    invoke<string>('user_name')
+      .then((name) => (userName = name || 'vous'))
+      .catch(() => {})
     document.addEventListener('click', handleClick)
-    return () => document.removeEventListener('click', handleClick)
+    return () => {
+      document.removeEventListener('click', handleClick)
+      stopTicker()
+    }
   })
 
   $effect(() => {
@@ -108,6 +134,48 @@
     list.scrollTop = list.scrollHeight
     void lastLength
   })
+
+  function startTicker() {
+    stopTicker()
+    now = Date.now()
+    ticker = window.setInterval(() => (now = Date.now()), 100)
+  }
+
+  function stopTicker() {
+    clearInterval(ticker)
+    ticker = undefined
+  }
+
+  function phaseLabel(phase?: string) {
+    return (phase && PHASES[phase]) ?? 'Préparation…'
+  }
+
+  /// Durée de l'étape en cours, en secondes, avec une décimale.
+  function phaseSeconds(message: Message) {
+    const start = message.phaseAt
+    if (!start) return '0,0'
+    const end = message.firstAt ?? message.doneAt ?? now
+    return Math.max(0, (end - start) / 1000).toFixed(1).replace('.', ',')
+  }
+
+  /// Débit : exact dès que le provider a envoyé ses compteurs, estimé sinon
+  /// (le flux ne permet pas de compter les tokens avant la fin).
+  function tokensPerSecond(message: Message) {
+    const start = message.firstAt
+    if (!start) return 0
+    const end = message.lastAt ?? now
+    const seconds = (end - start) / 1000
+    if (seconds < 0.2) return 0
+    const tokens = message.tokens ?? message.content.length / 4
+    return Math.round(tokens / seconds)
+  }
+
+  function stats(message: Message) {
+    const speed = tokensPerSecond(message)
+    if (!speed) return ''
+    if (!message.doneAt) return `Génération · ≈ ${speed} tok/s`
+    return message.tokens ? `${message.tokens} tokens · ${speed} tok/s` : `≈ ${speed} tok/s`
+  }
 
   async function send() {
     const text = input.trim()
@@ -119,17 +187,42 @@
 
     error = ''
     input = ''
-    messages = [...messages, { role: 'user', content: text }, { role: 'assistant', content: '' }]
+    messages = [
+      ...messages,
+      { role: 'user', content: text },
+      {
+        role: 'assistant',
+        content: '',
+        model: current.model,
+        phaseAt: Date.now(),
+      },
+    ]
     streaming = true
     requestId = crypto.randomUUID()
+    startTicker()
 
     const channel = new Channel<ChatEvent>()
     channel.onmessage = (event) => {
+      const message = messages[messages.length - 1]
+      if (event.type === 'phase') {
+        message.phase = event.name
+        message.phaseAt = Date.now()
+        now = Date.now()
+        return
+      }
       if (event.type === 'delta') {
-        messages[messages.length - 1].content += event.text
+        if (!message.firstAt) message.firstAt = Date.now()
+        message.lastAt = Date.now()
+        message.content += event.text
+        return
+      }
+      if (event.type === 'usage') {
+        message.tokens = event.completionTokens
         return
       }
       streaming = false
+      message.doneAt = Date.now()
+      stopTicker()
       if (event.type === 'error') error = event.message
     }
 
@@ -137,7 +230,7 @@
       await invoke('chat_send', {
         requestId,
         providerId,
-        messages: messages.slice(0, -1),
+        messages: messages.slice(0, -1).map(({ role, content }) => ({ role, content })),
         onEvent: channel,
       })
     } catch (e) {
@@ -146,6 +239,7 @@
       // Garde-fou : même si l'événement final se perd, l'envoi redevient possible.
       streaming = false
       requestId = ''
+      stopTicker()
     }
   }
 
@@ -183,13 +277,24 @@
 
   <div class="messages" role="log" aria-live="polite" bind:this={list}>
     {#each messages as message, index (index)}
+      {@const stat = message.role === 'assistant' ? stats(message) : ''}
+      {@const thinking =
+        streaming && message.role === 'assistant' && index === messages.length - 1 && !message.content}
       <article class={message.role}>
-        <span class="role">{message.role === 'user' ? 'vous' : 'ia'}</span>
+        <div class="meta" aria-live="off">
+          <span class="role">{message.role === 'user' ? userName : (message.model ?? 'ia')}</span>
+          {#if stat}
+            <span class="stat">{stat}</span>
+          {/if}
+        </div>
         <div class="text">
           {#if message.content}
             {@html renderMarkdown(message.content)}
-          {:else if streaming}
-            <p>…</p>
+          {:else if thinking}
+            <div class="phase" aria-live="off">
+              <span class="cursor"></span>
+              {phaseLabel(message.phase)} {phaseSeconds(message)} s
+            </div>
           {/if}
         </div>
       </article>
@@ -314,9 +419,53 @@
     border-left-color: var(--signal);
   }
 
+  .meta {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
   .role {
     font-size: 10px;
     color: var(--ink-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stat {
+    flex: none;
+    font-size: 10px;
+    color: var(--ink-faint);
+    white-space: nowrap;
+  }
+
+  .phase {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--ink-dim);
+    font-size: 12px;
+  }
+
+  .cursor {
+    width: 7px;
+    height: 12px;
+    background: var(--signal);
+    animation: blink 1s steps(1) infinite;
+  }
+
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor {
+      animation: none;
+    }
   }
 
   .text {

@@ -51,6 +51,7 @@ pub fn run() {
             ipc_chat::providers_test,
             ipc_chat::chat_send,
             ipc_chat::chat_cancel,
+            ipc_chat::user_name,
             ipc_docs::docs_settings,
             ipc_docs::docs_set_settings,
             ipc_docs::docs_stats,

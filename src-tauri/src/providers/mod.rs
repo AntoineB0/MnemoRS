@@ -4,7 +4,15 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ChatEvent {
+    /// Étape en cours avant le premier token : recherche documentaire, puis
+    /// attente du modèle.
+    Phase { name: String },
     Delta { text: String },
+    /// Compteurs exacts, quand le provider les renvoie en fin de stream.
+    Usage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+    },
     Done,
     Cancelled,
     Error { message: String },

@@ -122,6 +122,9 @@ pub async fn chat_send(
         .map_err(|e| format!("{e:#}"))?
         .ok_or("provider inconnu")?;
     let key = providers::get_key(&provider_id).map_err(|e| format!("{e:#}"))?;
+    let emit = |event: ChatEvent| {
+        let _ = on_event.send(event);
+    };
 
     let question = messages
         .iter()
@@ -129,6 +132,9 @@ pub async fn chat_send(
         .find(|message| message.role == "user")
         .map(|message| message.content.clone())
         .unwrap_or_default();
+    emit(ChatEvent::Phase {
+        name: "docs".into(),
+    });
     let doc_passages = retrieve_docs(&state, &question).await;
 
     let recent = state.db.recent(12, false).map_err(|e| format!("{e:#}"))?;
@@ -163,9 +169,9 @@ pub async fn chat_send(
         cancels.insert(request_id.clone(), Arc::clone(&cancel));
     }
 
-    let emit = |event: ChatEvent| {
-        let _ = on_event.send(event);
-    };
+    emit(ChatEvent::Phase {
+        name: "thinking".into(),
+    });
     let result = stream_chat(&provider, key.as_deref(), messages, &cancel, emit).await;
 
     if let Ok(mut cancels) = state.cancels.lock() {
@@ -196,6 +202,15 @@ pub fn chat_cancel(state: State<'_, AppState>, request_id: String) -> Result<(),
         cancel.store(true, Ordering::Relaxed);
     }
     Ok(())
+}
+
+/// Nom de session, affiché à la place de « vous » dans le chat.
+#[tauri::command]
+pub fn user_name() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "vous".into())
 }
 
 /// Corrections confirmées pour les échecs récents, dédupliquées par correction.
@@ -325,6 +340,15 @@ fn to_context(detail: CommandDetail) -> CommandContext {
     }
 }
 
+/// Compteurs exacts du chunk de fin de stream, quand le provider en envoie.
+/// Un chunk sans `usage` (ou sans tokens générés) est ignoré.
+fn usage(value: &serde_json::Value) -> Option<(u32, u32)> {
+    let usage = value.get("usage").filter(|usage| !usage.is_null())?;
+    let prompt = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+    let completion = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
+    (completion > 0).then_some((prompt, completion))
+}
+
 async fn stream_chat<F>(
     provider: &ProviderConfig,
     key: Option<&str>,
@@ -335,17 +359,23 @@ async fn stream_chat<F>(
 where
     F: Fn(ChatEvent),
 {
-    let response = request(
-        provider,
-        key,
-        json!({
-            "model": provider.model,
-            "messages": messages,
-            "temperature": 0.2,
-            "stream": true,
-        }),
-    )
-    .await?;
+    let mut body = json!({
+        "model": provider.model,
+        "messages": messages,
+        "temperature": 0.2,
+        "stream": true,
+        "stream_options": { "include_usage": true },
+    });
+    let mut response = request(provider, key, body.clone()).await?;
+
+    // Tous les providers compatibles OpenAI n'acceptent pas `stream_options`.
+    // Le refus arrive avant le premier token, donc on peut réessayer sans.
+    if matches!(response.status().as_u16(), 400 | 422) {
+        if let Some(object) = body.as_object_mut() {
+            object.remove("stream_options");
+        }
+        response = request(provider, key, body).await?;
+    }
 
     let status = response.status();
     if !status.is_success() {
@@ -355,6 +385,9 @@ where
 
     let mut stream = response.bytes_stream();
     let mut buffer = Vec::new();
+    // Après `finish_reason`, le provider peut encore envoyer un chunk de
+    // compteurs. On laisse un court délai, puis on coupe.
+    let mut finished = false;
 
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -363,8 +396,14 @@ where
 
         // Sans données pendant ce délai, on considère le provider muet : le
         // flux est coupé pour ne pas laisser l'interface bloquée.
-        let next = tokio::time::timeout(IDLE_TIMEOUT, stream.next()).await;
+        let wait = if finished {
+            std::time::Duration::from_secs(2)
+        } else {
+            IDLE_TIMEOUT
+        };
+        let next = tokio::time::timeout(wait, stream.next()).await;
         let chunk = match next {
+            Err(_) if finished => break,
             Err(_) => bail!(
                 "le modèle n'a rien envoyé pendant {} s",
                 IDLE_TIMEOUT.as_secs()
@@ -391,6 +430,13 @@ where
                 bail!("{message}");
             }
 
+            if let Some((prompt_tokens, completion_tokens)) = usage(&value) {
+                emit(ChatEvent::Usage {
+                    prompt_tokens,
+                    completion_tokens,
+                });
+            }
+
             if let Some(text) = value["choices"][0]["delta"]["content"].as_str() {
                 if !text.is_empty() {
                     emit(ChatEvent::Delta {
@@ -399,9 +445,10 @@ where
                 }
             }
 
-            // Certains providers terminent sans envoyer [DONE].
+            // Certains providers terminent sans envoyer [DONE] : on continue
+            // quand même un court instant pour capter les compteurs.
             if value["choices"][0]["finish_reason"].is_string() {
-                return Ok(());
+                finished = true;
             }
         }
     }
@@ -432,6 +479,25 @@ async fn request(
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn compteurs_lus_dans_le_chunk_de_fin() {
+        let value = serde_json::json!({
+            "choices": [],
+            "usage": { "prompt_tokens": 13, "completion_tokens": 796 },
+        });
+        assert_eq!(usage(&value), Some((13, 796)));
+    }
+
+    #[test]
+    fn chunk_sans_compteurs_ignore() {
+        let delta = serde_json::json!({ "choices": [{ "delta": { "content": "bonjour" } }] });
+        assert_eq!(usage(&delta), None);
+        let vide = serde_json::json!({ "usage": null });
+        assert_eq!(usage(&vide), None);
+        let zero = serde_json::json!({ "usage": { "completion_tokens": 0 } });
+        assert_eq!(usage(&zero), None);
+    }
 
     #[test]
     fn historique_borne_en_gardant_les_messages_recents() {
@@ -589,17 +655,24 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let text = Arc::new(Mutex::new(String::new()));
         let sink = Arc::clone(&text);
+        let usage = Arc::new(Mutex::new(None));
+        let counts = Arc::clone(&usage);
 
-        stream_chat(&provider, None, messages, &cancel, move |event| {
-            if let ChatEvent::Delta { text } = event {
-                sink.lock().unwrap().push_str(&text);
-            }
+        stream_chat(&provider, None, messages, &cancel, move |event| match event {
+            ChatEvent::Delta { text } => sink.lock().unwrap().push_str(&text),
+            ChatEvent::Usage {
+                prompt_tokens,
+                completion_tokens,
+            } => *counts.lock().unwrap() = Some((prompt_tokens, completion_tokens)),
+            _ => {}
         })
         .await
         .expect("stream Ollama");
 
         let text = text.lock().unwrap();
         assert!(!text.trim().is_empty(), "réponse vide");
-        println!("réponse : {text}");
+        let counts = usage.lock().unwrap().expect("compteurs exacts absents");
+        assert!(counts.1 > 0, "aucun token généré : {counts:?}");
+        println!("réponse : {text} | tokens : {counts:?}");
     }
 }
