@@ -39,6 +39,10 @@ pub struct ContextInput<'a> {
 /// Ollama démarre à 4096 tokens de contexte : on garde de la place pour la
 /// réponse en visant ~1500 tokens de prompt.
 const BUDGET_CHARS: usize = 6_000;
+/// Une sortie de commande réussie sert rarement en entier ; la couper laisse
+/// la place à la documentation et à plus de commandes. Les échecs gardent
+/// leur sortie complète : c'est là que se trouve le message d'erreur.
+const SUCCESS_OUTPUT_CHARS: usize = 300;
 const OUTPUT_CHARS: usize = 1_500;
 const FAILURE_OUTPUT_CHARS: usize = 800;
 
@@ -51,8 +55,10 @@ retour, une commande ou une sortie absents du contexte ; si l'information \
 manque, dis-le. Réponds uniquement en français, sans mélanger d'anglais, de façon \
 concise, et propose des commandes en bloc de code quand c'est utile.";
 
-/// Assemble le prompt système : en-tête, commandes récentes puis échecs,
-/// en supprimant les éléments les plus anciens quand le budget est dépassé.
+/// Assemble le prompt système : en-tête, documentation puis commandes
+/// récentes et échecs, en supprimant les éléments les plus anciens quand le
+/// budget est dépassé. La documentation passe en premier : sinon un historique
+/// chargé la fait disparaître entièrement.
 pub fn build(input: &ContextInput) -> String {
     let mut out = String::from(SYSTEM);
 
@@ -65,43 +71,48 @@ pub fn build(input: &ContextInput) -> String {
 
     let mut used = out.len();
 
-    if input.recent.is_empty() {
-        out.push_str("\n\nAucune commande enregistrée dans cette session.");
-    } else {
-        out.push_str("\n\n## Commandes récentes");
-        out.push_str("\nDe la plus ancienne à la plus récente.\n");
-
-        let mut selected: Vec<&CommandContext> = Vec::new();
-        for command in input.recent.iter().rev() {
-            let cost = estimate(command, OUTPUT_CHARS);
-            if used + cost > BUDGET_CHARS {
-                continue;
-            }
-            used += cost;
-            selected.push(command);
-        }
-        selected.reverse();
-
-        if selected.is_empty() {
-            out.push_str("\n(historique trop volumineux pour le budget)\n");
-        }
-        for command in selected {
-            out.push_str(&format_command(command, OUTPUT_CHARS));
-        }
-    }
-
     if !input.docs.is_empty() {
         out.push_str("\n## Documentation\n");
         out.push_str("Extraits de manuels et READMEs retrouvés pour la question. Cite la source quand tu t'en sers.\n");
         for doc in &input.docs {
             let cost = doc.content.len() + 120;
             if used + cost > BUDGET_CHARS {
-                break;
+                continue;
             }
             used += cost;
             out.push_str(&format!("\n[{}]\n", doc_label(doc)));
             out.push_str(&doc.content);
             out.push('\n');
+        }
+    }
+
+    if input.recent.is_empty() {
+        out.push_str("\n\nAucune commande enregistrée dans cette session.");
+    } else {
+        out.push_str("\n\n## Commandes récentes");
+        out.push_str("\nDe la plus ancienne à la plus récente.\n");
+
+        let mut selected: Vec<(&CommandContext, usize)> = Vec::new();
+        for command in input.recent.iter().rev() {
+            let cap = if command.exit_code == Some(0) {
+                SUCCESS_OUTPUT_CHARS
+            } else {
+                OUTPUT_CHARS
+            };
+            let cost = estimate(command, cap);
+            if used + cost > BUDGET_CHARS {
+                continue;
+            }
+            used += cost;
+            selected.push((command, cap));
+        }
+        selected.reverse();
+
+        if selected.is_empty() {
+            out.push_str("\n(historique trop volumineux pour le budget)\n");
+        }
+        for (command, cap) in selected {
+            out.push_str(&format_command(command, cap));
         }
     }
 
@@ -324,6 +335,36 @@ mod tests {
         assert!(prompt.len() <= BUDGET_CHARS + 2000);
         assert!(prompt.contains("doc:0"));
         assert!(!prompt.contains("doc:49"));
+    }
+
+    #[test]
+    fn documentation_garde_sa_place_malgre_un_historique_plein() {
+        let mut context = input(
+            (0..20)
+                .map(|index| command(&format!("commande-{index}"), &"y".repeat(1500), 0))
+                .collect(),
+            vec![],
+        );
+        context.docs = vec![DocPassage {
+            source: "/home/moi/RsHash/README.md".into(),
+            section: Some("Installation".into()),
+            content: "maturin develop".into(),
+            deleted: false,
+        }];
+        let prompt = build(&context);
+        assert!(prompt.contains("## Documentation"));
+        assert!(prompt.contains("maturin develop"));
+        assert!(prompt.contains("commande-19"));
+    }
+
+    #[test]
+    fn sortie_reussie_tronquee_avant_celle_d_un_echec() {
+        let prompt = build(&input(
+            vec![command("succes", &"s".repeat(1000), 0)],
+            vec![command("echec", &"e".repeat(400), 1)],
+        ));
+        assert!(prompt.contains("[tronqué]"));
+        assert!(prompt.contains(&"e".repeat(400)));
     }
 
     #[test]
