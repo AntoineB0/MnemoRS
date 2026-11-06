@@ -9,6 +9,7 @@ pub enum ChatEvent {
     Phase { name: String },
     Delta { text: String },
     /// Compteurs exacts, quand le provider les renvoie en fin de stream.
+    #[serde(rename_all = "camelCase")]
     Usage {
         prompt_tokens: u32,
         completion_tokens: u32,
@@ -66,5 +67,29 @@ pub fn default_provider() -> ProviderConfig {
         name: "Ollama (local)".into(),
         base_url: "http://localhost:11434/v1".into(),
         model: "qwen3.5:9b".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evenements_serialises_pour_le_frontend() {
+        let usage = serde_json::to_value(ChatEvent::Usage {
+            prompt_tokens: 13,
+            completion_tokens: 796,
+        })
+        .unwrap();
+        assert_eq!(usage["type"], "usage");
+        assert_eq!(usage["promptTokens"], 13);
+        assert_eq!(usage["completionTokens"], 796);
+
+        let phase = serde_json::to_value(ChatEvent::Phase {
+            name: "docs".into(),
+        })
+        .unwrap();
+        assert_eq!(phase["type"], "phase");
+        assert_eq!(phase["name"], "docs");
     }
 }
