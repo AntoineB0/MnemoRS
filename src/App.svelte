@@ -44,11 +44,14 @@
 
   function drag(event: PointerEvent) {
     if (!dragging) return
-    save(clamp(window.innerWidth - event.clientX))
+    width = clamp(window.innerWidth - event.clientX)
   }
 
   function stopDrag() {
+    if (!dragging) return
     dragging = false
+    // Écriture unique en fin de geste : localStorage est synchrone.
+    save(width)
   }
 
   function keydown(event: KeyboardEvent) {
