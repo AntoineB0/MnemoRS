@@ -5,6 +5,8 @@
 
   type Tab = 'history' | 'chat' | 'settings'
 
+  let { width = 360 }: { width?: number } = $props()
+
   let tab = $state<Tab>('history')
 
   const tabs: { id: Tab; label: string }[] = [
@@ -14,7 +16,7 @@
   ]
 </script>
 
-<aside class="sidebar">
+<aside class="sidebar" style:width={`${width}px`}>
   <nav>
     {#each tabs as item (item.id)}
       <button class:active={tab === item.id} onclick={() => (tab = item.id)}>
@@ -40,8 +42,8 @@
 
 <style>
   .sidebar {
-    width: 360px;
-    min-width: 300px;
+    flex: none;
+    max-width: calc(100vw - 320px);
     display: flex;
     flex-direction: column;
     background: var(--surface);
