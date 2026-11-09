@@ -64,7 +64,8 @@ pub fn restrict(path: &Path, mode: u32) -> Result<()> {
 
 impl Db {
     pub fn open(path: &Path) -> Result<Self> {
-        let conn = Connection::open(path).with_context(|| format!("ouverture de {}", path.display()))?;
+        let conn =
+            Connection::open(path).with_context(|| format!("ouverture de {}", path.display()))?;
         // Les fichiers -wal et -shm héritent de l'umask : le dossier 0700 les protège.
         restrict(path, 0o600)?;
         Self::from_connection(conn)
@@ -95,12 +96,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn insert_command(
-        &self,
-        session_id: &str,
-        record: &CommandRecord,
-        ts: i64,
-    ) -> Result<i64> {
+    pub fn insert_command(&self, session_id: &str, record: &CommandRecord, ts: i64) -> Result<i64> {
         let conn = self.conn()?;
         conn.execute(
             "INSERT INTO commands
@@ -163,7 +159,11 @@ impl Db {
     pub fn recent(&self, limit: usize, only_failed: bool) -> Result<Vec<CommandDetail>> {
         let conn = self.conn()?;
         let limit = limit.clamp(1, 100) as i64;
-        let failure = if only_failed { "WHERE exit_code <> 0" } else { "" };
+        let failure = if only_failed {
+            "WHERE exit_code <> 0"
+        } else {
+            ""
+        };
         let sql = format!(
             "SELECT id, cmd, cwd, exit_code, output_truncated, sensitive,
                     duration_ms, ts, output
@@ -256,8 +256,13 @@ impl Db {
         Ok(())
     }
 
-    pub fn search_docs_fts(&self, query: &str, embed_model: &str, limit: usize) -> Result<Vec<i64>> {
-        let fts = fts_query(query);
+    pub fn search_docs_fts(
+        &self,
+        query: &str,
+        embed_model: &str,
+        limit: usize,
+    ) -> Result<Vec<i64>> {
+        let fts = fts_query_docs(query);
         if fts.is_empty() {
             return Ok(Vec::new());
         }
@@ -272,6 +277,17 @@ impl Db {
         )?;
         let rows = stmt.query_map(params![fts, embed_model, limit as i64], |row| row.get(0))?;
         Ok(rows.collect::<rusqlite::Result<Vec<i64>>>()?)
+    }
+
+    /// Fusionne les segments FTS5 laissés par les réindexations. Sans cela,
+    /// une requête à préfixes scanne tout l'index (600 ms au lieu de 30 ms).
+    pub fn optimize_docs_fts(&self) -> Result<()> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO doc_chunks_fts(doc_chunks_fts) VALUES('optimize')",
+            [],
+        )?;
+        Ok(())
     }
 
     pub fn all_embeddings(&self, embed_model: &str) -> Result<Arc<Vec<(i64, Vec<f32>)>>> {
@@ -398,10 +414,11 @@ impl Db {
     pub fn docs_stats(&self) -> Result<docs::DocsStats> {
         let conn = self.conn()?;
         let chunks = conn.query_row("SELECT COUNT(*) FROM doc_chunks", [], |row| row.get(0))?;
-        let deleted =
-            conn.query_row("SELECT COUNT(*) FROM doc_chunks WHERE deleted = 1", [], |row| {
-                row.get(0)
-            })?;
+        let deleted = conn.query_row(
+            "SELECT COUNT(*) FROM doc_chunks WHERE deleted = 1",
+            [],
+            |row| row.get(0),
+        )?;
         let mut stmt = conn.prepare("SELECT DISTINCT source FROM doc_chunks ORDER BY source")?;
         let sources = stmt
             .query_map([], |row| row.get(0))?
@@ -655,7 +672,13 @@ impl Db {
                name = excluded.name,
                base_url = excluded.base_url,
                model = excluded.model",
-            params![provider.id, provider.name, provider.base_url, provider.model, ts],
+            params![
+                provider.id,
+                provider.name,
+                provider.base_url,
+                provider.model,
+                ts
+            ],
         )?;
         Ok(())
     }
@@ -697,6 +720,30 @@ fn migrate(conn: &Connection) -> Result<()> {
 /// bien `archive` et `tgz`, tels que FTS5 les indexe.
 fn fts_query(input: &str) -> String {
     fts_tokens(input)
+        .map(|token| format!("{token}*"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Mots trop courants pour discriminer : chaque préfixe supplémentaire fait
+/// scanner l'index FTS sans améliorer le classement.
+const FTS_STOPWORDS: &[&str] = &[
+    "au", "aux", "avec", "ce", "ces", "cette", "comment", "dans", "de", "des", "du", "elle", "en",
+    "est", "et", "eux", "il", "ils", "je", "la", "le", "les", "leur", "lui", "ma", "mais", "me",
+    "mes", "moi", "mon", "ne", "nos", "notre", "nous", "on", "ou", "par", "pas", "pour",
+    "pourquoi", "quand", "que", "quel", "quelle", "qui", "quoi", "sa", "se", "ses", "son", "sont",
+    "sur", "ta", "te", "tes", "toi", "ton", "tu", "un", "une", "vos", "votre", "vous", "a", "an",
+    "and", "are", "as", "at", "be", "by", "do", "does", "for", "from", "how", "i", "in", "is",
+    "it", "of", "or", "that", "the", "this", "to", "was", "what", "when", "where", "which", "who",
+    "why", "with", "you",
+];
+
+/// Requête FTS pour la documentation : mots vides retirés et nombre de
+/// préfixes borné. La recherche d'historique garde `fts_query`.
+fn fts_query_docs(input: &str) -> String {
+    fts_tokens(input)
+        .filter(|token| !FTS_STOPWORDS.contains(&token.to_lowercase().as_str()))
+        .take(8)
         .map(|token| format!("{token}*"))
         .collect::<Vec<_>>()
         .join(" ")
@@ -768,7 +815,8 @@ mod tests {
 
     fn db() -> Db {
         let db = Db::open_in_memory().unwrap();
-        db.ensure_session("pty-1", "zsh", Some("/home/moi"), 1).unwrap();
+        db.ensure_session("pty-1", "zsh", Some("/home/moi"), 1)
+            .unwrap();
         db
     }
 
@@ -791,15 +839,20 @@ mod tests {
     #[test]
     fn migration_idempotente() {
         let db = db();
-        db.insert_command("pty-1", &record("ls", "fichier", 0), 10).unwrap();
+        db.insert_command("pty-1", &record("ls", "fichier", 0), 10)
+            .unwrap();
         assert_eq!(db.count().unwrap(), 1);
     }
 
     #[test]
     fn recherche_fts_sur_commande_et_sortie() {
         let db = db();
-        db.insert_command("pty-1", &record("tar -xzvf archive.tgz", "extraction ok", 0), 10)
-            .unwrap();
+        db.insert_command(
+            "pty-1",
+            &record("tar -xzvf archive.tgz", "extraction ok", 0),
+            10,
+        )
+        .unwrap();
         db.insert_command("pty-1", &record("ls", "archive.tgz", 0), 20)
             .unwrap();
 
@@ -821,7 +874,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(db.search("Ressources-20261006.zip", 10, false).unwrap().len(), 1);
+        assert_eq!(
+            db.search("Ressources-20261006.zip", 10, false)
+                .unwrap()
+                .len(),
+            1
+        );
         assert_eq!(db.search("archive.tgz", 10, false).unwrap().len(), 0);
         assert_eq!(db.search("20261006", 10, false).unwrap().len(), 1);
     }
@@ -829,7 +887,8 @@ mod tests {
     #[test]
     fn saisie_ponctuee_ne_casse_pas_fts() {
         let db = db();
-        db.insert_command("pty-1", &record("echo \"it's fine\"", "ok", 0), 10).unwrap();
+        db.insert_command("pty-1", &record("echo \"it's fine\"", "ok", 0), 10)
+            .unwrap();
         assert!(db.search("\"it's (fine) *", 10, false).is_ok());
         assert!(db.search("!!!", 10, false).is_ok());
     }
@@ -837,8 +896,10 @@ mod tests {
     #[test]
     fn filtre_echecs_et_ordre_chronologique() {
         let db = db();
-        db.insert_command("pty-1", &record("true", "", 0), 10).unwrap();
-        db.insert_command("pty-1", &record("false", "", 1), 20).unwrap();
+        db.insert_command("pty-1", &record("true", "", 0), 10)
+            .unwrap();
+        db.insert_command("pty-1", &record("false", "", 1), 20)
+            .unwrap();
 
         let failed = db.search("", 10, true).unwrap();
         assert_eq!(failed.len(), 1);
@@ -925,25 +986,86 @@ mod tests {
         assert!(found.content.contains("extraire"));
         assert_eq!(found.source, "man:tar");
 
-        db.replace_source("man:tar", Some("tar"), &[chunk("NOM", "tar archive", 0.3)], "bge-m3:1024", 20)
-            .unwrap();
+        db.replace_source(
+            "man:tar",
+            Some("tar"),
+            &[chunk("NOM", "tar archive", 0.3)],
+            "bge-m3:1024",
+            20,
+        )
+        .unwrap();
         assert_eq!(db.docs_stats().unwrap().chunks, 1);
+    }
+
+    #[test]
+    fn requete_docs_retire_les_mots_vides() {
+        assert_eq!(
+            fts_query_docs("comment lancer le moteur avec une commande"),
+            "lancer* moteur* commande*"
+        );
+    }
+
+    #[test]
+    fn requete_docs_garde_les_jetons_techniques() {
+        assert_eq!(fts_query_docs("cd /tmp et git log"), "cd* tmp* git* log*");
+    }
+
+    #[test]
+    fn requete_docs_borne_le_nombre_de_prefixes() {
+        let query = fts_query_docs("alpha beta gamma delta epsilon zeta eta theta iota kappa");
+        assert_eq!(query.split(' ').count(), 8);
+    }
+
+    #[test]
+    fn optimisation_fts_conserve_la_recherche() {
+        let db = db();
+        db.replace_source(
+            "man:tar",
+            Some("tar"),
+            &[chunk("OPTIONS", "extraire une archive", 0.1)],
+            "m",
+            10,
+        )
+        .unwrap();
+
+        db.optimize_docs_fts().unwrap();
+
+        let ids = db.search_docs_fts("extraire", "m", 5).unwrap();
+        assert_eq!(ids.len(), 1);
     }
 
     #[test]
     fn recherche_filtre_par_modele() {
         let db = db();
-        db.replace_source("man:tar", Some("tar"), &[chunk("OPTIONS", "extraire", 0.1)], "modele-a", 10)
-            .unwrap();
-        assert!(db.search_docs_fts("extraire", "modele-b", 5).unwrap().is_empty());
-        assert_eq!(db.search_docs_fts("extraire", "modele-a", 5).unwrap().len(), 1);
+        db.replace_source(
+            "man:tar",
+            Some("tar"),
+            &[chunk("OPTIONS", "extraire", 0.1)],
+            "modele-a",
+            10,
+        )
+        .unwrap();
+        assert!(db
+            .search_docs_fts("extraire", "modele-b", 5)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            db.search_docs_fts("extraire", "modele-a", 5).unwrap().len(),
+            1
+        );
     }
 
     #[test]
     fn embeddings_relus_et_effaces() {
         let db = db();
-        db.replace_source("man:tar", Some("tar"), &[chunk("OPTIONS", "texte", 0.5)], "m", 10)
-            .unwrap();
+        db.replace_source(
+            "man:tar",
+            Some("tar"),
+            &[chunk("OPTIONS", "texte", 0.5)],
+            "m",
+            10,
+        )
+        .unwrap();
         let all = db.all_embeddings("m").unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].1, vec![0.5, 1.0, 0.0]);
@@ -956,15 +1078,27 @@ mod tests {
     #[test]
     fn vecteurs_en_cache_invalides_apres_indexation() {
         let db = db();
-        db.replace_source("man:tar", Some("tar"), &[chunk("OPTIONS", "texte", 0.5)], "m", 10)
-            .unwrap();
+        db.replace_source(
+            "man:tar",
+            Some("tar"),
+            &[chunk("OPTIONS", "texte", 0.5)],
+            "m",
+            10,
+        )
+        .unwrap();
 
         let first = db.all_embeddings("m").unwrap();
         let second = db.all_embeddings("m").unwrap();
         assert!(Arc::ptr_eq(&first, &second));
 
-        db.replace_source("man:tar", Some("tar"), &[chunk("OPTIONS", "autre", 0.7)], "m", 20)
-            .unwrap();
+        db.replace_source(
+            "man:tar",
+            Some("tar"),
+            &[chunk("OPTIONS", "autre", 0.7)],
+            "m",
+            20,
+        )
+        .unwrap();
         let third = db.all_embeddings("m").unwrap();
         assert!(!Arc::ptr_eq(&first, &third));
         assert_eq!(third[0].1, vec![0.7, 1.0, 0.0]);
@@ -976,16 +1110,25 @@ mod tests {
         assert!(db.get_setting("embed_model").unwrap().is_none());
         db.set_setting("embed_model", "bge-m3").unwrap();
         db.set_setting("embed_model", "autre").unwrap();
-        assert_eq!(db.get_setting("embed_model").unwrap().as_deref(), Some("autre"));
+        assert_eq!(
+            db.get_setting("embed_model").unwrap().as_deref(),
+            Some("autre")
+        );
     }
 
     #[test]
     fn outils_extraits_de_l_historique() {
         let db = db();
-        db.insert_command("pty-1", &record("tar -xzf a.tgz", "", 0), 10).unwrap();
-        db.insert_command("pty-1", &record("/usr/bin/git status", "", 0), 20).unwrap();
-        db.insert_command("pty-1", &record("tar -tzf a.tgz", "", 0), 30).unwrap();
-        assert_eq!(db.tool_names().unwrap(), vec!["git".to_string(), "tar".to_string()]);
+        db.insert_command("pty-1", &record("tar -xzf a.tgz", "", 0), 10)
+            .unwrap();
+        db.insert_command("pty-1", &record("/usr/bin/git status", "", 0), 20)
+            .unwrap();
+        db.insert_command("pty-1", &record("tar -tzf a.tgz", "", 0), 30)
+            .unwrap();
+        assert_eq!(
+            db.tool_names().unwrap(),
+            vec!["git".to_string(), "tar".to_string()]
+        );
     }
 
     #[test]
@@ -997,7 +1140,8 @@ mod tests {
         let fixed = db
             .insert_command("pty-1", &record("tar -xJf a.tar.xz", "", 0), 20)
             .unwrap();
-        db.insert_fix(failed, fixed, 0.99, "auto", "live", 20).unwrap();
+        db.insert_fix(failed, fixed, 0.99, "auto", "live", 20)
+            .unwrap();
 
         let found = db.similar_fixes("tar -xzf b.tgz", 999, 5).unwrap();
         assert_eq!(found.len(), 1);
@@ -1030,7 +1174,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(db.pending_fixes(10).unwrap().len(), 1);
-        assert!(db.similar_fixes("python app.py", 999, 5).unwrap().is_empty());
+        assert!(db
+            .similar_fixes("python app.py", 999, 5)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1056,7 +1203,10 @@ mod tests {
         db.set_fix_status(fix.id, "confirmed").unwrap();
         db.insert_fix(failed, fixed, 0.99, "auto", "live", 30)
             .unwrap();
-        assert_eq!(db.fix_for_command(failed).unwrap().unwrap().status, "confirmed");
+        assert_eq!(
+            db.fix_for_command(failed).unwrap().unwrap().status,
+            "confirmed"
+        );
     }
 
     #[test]

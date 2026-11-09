@@ -88,6 +88,14 @@ where
         }
     }
 
+    // Les remplacements de sources laissent des segments FTS5 qui ralentissent
+    // les requêtes à préfixes ; on les fusionne une fois la passe terminée.
+    if report.indexed > 0 || report.deleted > 0 {
+        if let Err(error) = db.optimize_docs_fts() {
+            log::warn!("optimisation de l'index FTS : {error:#}");
+        }
+    }
+
     Ok(report)
 }
 

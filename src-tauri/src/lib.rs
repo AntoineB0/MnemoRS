@@ -72,6 +72,11 @@ pub fn run() {
             let db = storage::Db::open(&data_dir.join("mnemors.db"))
                 .map_err(|error| format!("{error:#}"))?;
 
+            // Compacte l'index laissé fragmenté par les indexations précédentes.
+            if let Err(error) = db.optimize_docs_fts() {
+                log::warn!("optimisation de l'index FTS : {error:#}");
+            }
+
             match fixes::backfill(&db, 5_000) {
                 Ok(0) => {}
                 Ok(count) => log::info!("rattrapage : {count} corrections trouvées dans l'historique"),
