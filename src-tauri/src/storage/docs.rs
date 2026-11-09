@@ -29,7 +29,10 @@ pub struct NewChunk {
 }
 
 pub fn encode_embedding(values: &[f32]) -> Vec<u8> {
-    values.iter().flat_map(|value| value.to_le_bytes()).collect()
+    values
+        .iter()
+        .flat_map(|value| value.to_le_bytes())
+        .collect()
 }
 
 pub fn decode_embedding(bytes: &[u8]) -> Vec<f32> {
