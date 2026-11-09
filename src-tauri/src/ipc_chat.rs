@@ -261,7 +261,7 @@ async fn retrieve_docs(state: &AppState, question: &str) -> Vec<DocPassage> {
     let vector = match embedder
         .embed_within(
             &[question.to_string()],
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(20),
         )
         .await
     {
